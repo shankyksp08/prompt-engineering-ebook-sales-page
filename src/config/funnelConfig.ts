@@ -39,10 +39,10 @@ export interface FunnelConfig {
   publisherName: string;
   supportEmail: string;
 
-  // Legal and policy links
-  privacyPolicyUrl: string;
-  termsUrl: string;
+  // Legal and policy links (Refund Policy, Privacy Policy, Disclaimer)
   refundPolicyUrl: string;
+  privacyPolicyUrl: string;
+  disclaimerUrl: string;
 }
 
 export const FUNNEL_CONFIG: FunnelConfig = {
@@ -54,9 +54,8 @@ export const FUNNEL_CONFIG: FunnelConfig = {
   topicCount: 100,
   partCount: 9,
 
-  // IMPORTANT: Replace this placeholder with your external payment checkout URL when ready.
-  // If left as default, clicking "Get This eBook" displays the setup guide with a simulation option.
-  paymentUrl: "REPLACE_WITH_MY_PAYMENT_CHECKOUT_URL",
+  // Razorpay Payment Link connected to all purchase CTA buttons
+  paymentUrl: "https://rzp.io/rzp/aGZfHfs",
 
   // Bundled static PDF path in the repository
   ebookDownloadUrl: "/assets/aistudio/Prompt_Engineering_Handbook_d0bf9480.pdf",
@@ -72,12 +71,12 @@ export const FUNNEL_CONFIG: FunnelConfig = {
   // Business & support info
   authorName: "Prompt Engineering Research Collective",
   publisherName: "Prompt Engineering Handbook Publishing",
-  supportEmail: "support@promptengineeringhandbook.com",
+  supportEmail: "supportdigitalgovind@gmail.com",
 
-  // Policy URLs (set to your own external links or leave default for in-app modal views)
-  privacyPolicyUrl: "#privacy",
-  termsUrl: "#terms",
+  // Three supported policies: Refund Policy, Privacy Policy, Disclaimer
   refundPolicyUrl: "#refund",
+  privacyPolicyUrl: "#privacy",
+  disclaimerUrl: "#disclaimer",
 };
 
 /**

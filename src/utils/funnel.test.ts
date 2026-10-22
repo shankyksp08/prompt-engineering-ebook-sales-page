@@ -13,6 +13,7 @@ import {
 test('isValidCheckoutUrl correctly identifies placeholders and real links', () => {
   assert.equal(isValidCheckoutUrl(''), false);
   assert.equal(isValidCheckoutUrl('REPLACE_WITH_MY_PAYMENT_CHECKOUT_URL'), false);
+  assert.equal(isValidCheckoutUrl('https://rzp.io/rzp/aGZfHfs'), true);
   assert.equal(isValidCheckoutUrl('https://buy.stripe.com/test_12345'), true);
   assert.equal(isValidCheckoutUrl('https://mybusiness.lemonsqueezy.com/buy/xyz'), true);
   assert.equal(isValidCheckoutUrl('not-a-valid-url'), false);
@@ -41,6 +42,7 @@ test('calculateDiscountPercent calculates honest discount when applicable', () =
 });
 
 test('isValidEmail detects valid support email addresses', () => {
+  assert.equal(isValidEmail('supportdigitalgovind@gmail.com'), true);
   assert.equal(isValidEmail('support@promptengineeringhandbook.com'), true);
   assert.equal(isValidEmail('SET_MY_SUPPORT_EMAIL'), false);
   assert.equal(isValidEmail('bademail@'), false);

@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   FileText,
   AlertCircle,
-  Mail,
   ArrowLeft,
   BookOpen,
   Clock,
@@ -243,12 +242,12 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
         <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 text-left mb-10">
           <button
             onClick={() => setShowSecurityInfo(!showSecurityInfo)}
-            className="w-full flex items-center justify-between text-left focus:outline-none"
+            className="w-full flex items-center justify-between text-left focus:outline-none cursor-pointer"
           >
             <div className="flex items-center gap-2.5">
               <Shield className="w-4 h-4 text-cyan-400" />
               <span className="text-xs sm:text-sm font-semibold text-slate-200">
-                Architecture Note: Simple Static Delivery vs. Verified Secure Delivery
+                Delivery Mode &amp; Payment Verification Notice
               </span>
             </div>
             <div className="text-slate-400 p-1">
@@ -259,27 +258,16 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
           {showSecurityInfo && (
             <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 text-xs text-slate-300 leading-relaxed animate-fade-in">
               <p>
-                <strong>Current Configuration (Option A — Simple Static Delivery):</strong> This thank-you page relies on the payment processor&apos;s post-checkout redirect. As with all client-side redirect models, the thank-you URL is public and does not cryptographically authenticate buyer transactions. This provides the fastest, most reliable launch without server maintenance.
+                <strong>Delivery Mode:</strong> This page is designed as the post-payment redirection destination for your Razorpay Payment Link (<code className="bg-slate-800 px-1 py-0.5 rounded font-mono text-cyan-300">https://rzp.io/rzp/aGZfHfs</code>).
               </p>
               <p>
-                <strong>Future Upgrade (Option B — Verified Server Delivery):</strong> For strict access control, your payment processor can send signed webhooks (e.g. Stripe <code className="bg-slate-800 px-1 py-0.5 rounded font-mono">checkout.session.completed</code>) to a backend endpoint which validates signatures, stores verified order records, and issues time-limited signed S3/GCS download URLs.
+                <strong>Notice on Verification:</strong> Visiting this URL alone does not cryptographically prove that a payment was completed. This site operates as a client-side delivery portal. The download link provides direct access to the bundled eBook and is not gated behind server-side authorization.
+              </p>
+              <p>
+                <strong>Server-Side Hardening (Optional):</strong> For strict copy protection, configure a server webhook (e.g. Razorpay <code className="bg-slate-800 px-1 py-0.5 rounded font-mono">payment_link.paid</code>), verify the <code className="bg-slate-800 px-1 py-0.5 rounded font-mono">X-Razorpay-Signature</code> via HMAC-SHA256, and generate a time-limited signed download token.
               </p>
             </div>
           )}
-        </div>
-
-        {/* Support Help Block */}
-        <div className="text-center text-xs text-slate-400 space-y-2">
-          <p>
-            Encountering any issues? Need a fresh download link or invoice?
-          </p>
-          <a
-            href={`mailto:${FUNNEL_CONFIG.supportEmail}`}
-            className="inline-flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300 font-semibold"
-          >
-            <Mail className="w-3.5 h-3.5" />
-            <span>{FUNNEL_CONFIG.supportEmail}</span>
-          </a>
         </div>
 
       </main>

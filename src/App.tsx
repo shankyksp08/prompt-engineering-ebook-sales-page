@@ -22,7 +22,7 @@ import { FaqSection } from './components/FaqSection.tsx';
 import { FinalCta } from './components/FinalCta.tsx';
 import { Footer } from './components/Footer.tsx';
 import { ThankYouPage } from './components/ThankYouPage.tsx';
-import { CheckoutGuideModal } from './components/CheckoutGuideModal.tsx';
+import { AdminPortal } from './components/AdminPortal.tsx';
 import { ProductPreviewModal } from './components/ProductPreviewModal.tsx';
 import { PolicyModal, PolicyType } from './components/PolicyModal.tsx';
 
@@ -31,16 +31,26 @@ export default function App() {
     return typeof window !== 'undefined' ? window.location.pathname : '/';
   });
 
-  const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [activePolicy, setActivePolicy] = useState<PolicyType>(null);
 
   // Sync with browser navigation (Back/Forward buttons)
   useEffect(() => {
     const handlePopState = () => {
-      setCurrentPath(window.location.pathname);
+      const path = window.location.pathname;
+      if (path === '/return-policy' || path.endsWith('/return-policy')) {
+        window.history.replaceState({}, '', '/');
+        setCurrentPath('/');
+      } else {
+        setCurrentPath(path);
+      }
       window.scrollTo(0, 0);
     };
+
+    if (window.location.pathname === '/return-policy' || window.location.pathname.endsWith('/return-policy')) {
+      window.history.replaceState({}, '', '/');
+      setCurrentPath('/');
+    }
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -63,15 +73,24 @@ export default function App() {
       // Direct user to external payment provider checkout
       window.location.href = FUNNEL_CONFIG.paymentUrl;
     } else {
-      // Inform site owner/tester and provide instant test redirect to /thank-you
-      setCheckoutModalOpen(true);
+      navigate('/thank-you');
     }
   };
 
-  // Route: /thank-you
+  // Route: /thank-you (Customer Fulfillment Portal)
   if (currentPath === '/thank-you' || currentPath.endsWith('/thank-you')) {
     return (
       <ThankYouPage onNavigateHome={() => navigate('/')} />
+    );
+  }
+
+  // Route: /admin (Private Development & Admin Console)
+  if (currentPath === '/admin' || currentPath.endsWith('/admin')) {
+    return (
+      <AdminPortal
+        onNavigateHome={() => navigate('/')}
+        onNavigateThankYou={() => navigate('/thank-you')}
+      />
     );
   }
 
@@ -132,20 +151,12 @@ export default function App() {
         />
       </main>
 
-      {/* SECTION M — Footer with Policy Links & Config Guide */}
+      {/* SECTION M — Public Footer with Legal Policy Links and Support Email */}
       <Footer
         onOpenPolicy={(type) => setActivePolicy(type)}
-        onOpenConfigModal={() => setCheckoutModalOpen(true)}
-        onNavigateThankYou={() => navigate('/thank-you')}
       />
 
       {/* Modals & Dialogs */}
-      <CheckoutGuideModal
-        isOpen={checkoutModalOpen}
-        onClose={() => setCheckoutModalOpen(false)}
-        onSimulateRedirect={() => navigate('/thank-you')}
-      />
-
       <ProductPreviewModal
         isOpen={previewModalOpen}
         onClose={() => setPreviewModalOpen(false)}

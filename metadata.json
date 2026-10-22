@@ -1,0 +1,6 @@
+{
+  "name": "Prompt Engineering Handbook - Sales Funnel",
+  "description": "High-converting sales funnel and download delivery portal for the Prompt Engineering Handbook digital eBook.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

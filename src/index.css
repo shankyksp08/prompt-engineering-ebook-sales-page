@@ -32,3 +32,19 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out forwards;
 }
+
+@media print {
+  body {
+    visibility: hidden !important;
+  }
+  body::before {
+    content: "Protected Content: Printing and offline document extraction are restricted by digital rights management.";
+    visibility: visible !important;
+    display: block !important;
+    padding: 3rem !important;
+    font-size: 18px !important;
+    font-family: sans-serif !important;
+    color: #b91c1c !important;
+    text-align: center !important;
+  }
+}

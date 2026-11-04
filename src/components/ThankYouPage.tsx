@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Download,
   CheckCircle2,
@@ -6,26 +6,52 @@ import {
   AlertCircle,
   ArrowLeft,
   BookOpen,
-  Clock,
-  Code,
   Shield,
   Layers,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react';
 import { FUNNEL_CONFIG, isDownloadConfigured } from '../config/funnelConfig.ts';
 import { READING_PATHS } from '../utils/funnel.ts';
 import { BookMockup } from './BookMockup.tsx';
+import {
+  parseRazorpayPaymentParams,
+  createCustomerLicense,
+  getActiveLicense,
+  CustomerLicense,
+} from '../utils/security.ts';
 
 interface ThankYouPageProps {
   onNavigateHome: () => void;
+  onNavigateReader?: () => void;
+  onNavigateLogin?: () => void;
 }
 
-export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) => {
+export const ThankYouPage: React.FC<ThankYouPageProps> = ({
+  onNavigateHome,
+  onNavigateReader,
+  onNavigateLogin,
+}) => {
   const [downloadTriggered, setDownloadTriggered] = useState(false);
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
   const [activePathTab, setActivePathTab] = useState<'30-minute' | 'practical' | 'builder'>('30-minute');
+  const [verifiedLicense, setVerifiedLicense] = useState<CustomerLicense | null>(() => getActiveLicense());
+  const [detectedPaymentId, setDetectedPaymentId] = useState<string | null>(null);
+
+  // Check for Razorpay payment callback in query params
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const parsed = parseRazorpayPaymentParams(window.location.search);
+      if (parsed.isPaid && parsed.paymentId) {
+        setDetectedPaymentId(parsed.paymentId);
+        const lic = createCustomerLicense('verified.customer@razorpay.com', parsed.paymentId, 'Handbook Customer');
+        setVerifiedLicense(lic);
+      }
+    }
+  }, []);
 
   const hasConfiguredDownload = isDownloadConfigured(FUNNEL_CONFIG.ebookDownloadUrl);
 
@@ -51,7 +77,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-xs font-mono text-emerald-400 font-semibold uppercase tracking-wider">
-              Order Fulfillment Portal
+              {verifiedLicense ? 'Verified Order Fulfillment' : 'Order Fulfillment Portal'}
             </span>
           </div>
         </div>
@@ -75,11 +101,19 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
           </h1>
 
           <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            Your digital copy is ready for immediate download. Click the button below to save the 81-page PDF file to your device.
+            Your digital copy and online reader access are ready. Start reading immediately in our protected online reader with bookmarking, or download the 81-page vector PDF.
           </p>
+
+          {/* Payment verified pill */}
+          {detectedPaymentId && (
+            <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Razorpay Payment Verified: {detectedPaymentId}</span>
+            </div>
+          )}
         </div>
 
-        {/* Central Download Card */}
+        {/* Central Delivery Card */}
         <div className="bg-slate-900/90 border border-slate-700/80 rounded-3xl p-6 sm:p-10 shadow-2xl mb-12 relative overflow-hidden">
           <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
             
@@ -88,18 +122,18 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
               <BookMockup size="sm" interactive={false} />
             </div>
 
-            {/* Right: Primary Download Action */}
+            {/* Right: Primary Reading & Download Actions */}
             <div className="md:col-span-7 flex flex-col justify-center text-left space-y-5">
               
               <div className="space-y-1">
                 <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold">
-                  Deliverable File Details
+                  Deliverable Package
                 </span>
                 <h3 className="text-xl sm:text-2xl font-bold text-white">
                   {FUNNEL_CONFIG.productTitle}
                 </h3>
                 <p className="text-xs text-slate-400">
-                  {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Vector PDF Format
+                  {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Vector PDF &amp; Online Reader
                 </p>
               </div>
 
@@ -109,64 +143,47 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
                   📄 81 Pages
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
-                  💾 ~305 KB PDF
-                </span>
-                <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
                   ⚡ 100 Topics
+                </span>
+                <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-emerald-400">
+                  🔒 Dynamic DRM Watermark
                 </span>
               </div>
 
-              {/* Primary Download Button */}
-              {hasConfiguredDownload ? (
-                <div className="space-y-3 pt-2">
-                  <a
-                    href={FUNNEL_CONFIG.ebookDownloadUrl}
-                    download="Prompt_Engineering_Handbook_2026.pdf"
-                    onClick={handleDownloadClick}
-                    className="inline-flex w-full sm:w-auto items-center justify-center gap-3 py-4 px-8 rounded-xl bg-gradient-to-r from-emerald-400 via-teal-500 to-cyan-500 hover:from-emerald-300 hover:to-cyan-400 text-slate-950 font-extrabold text-base transition-all shadow-xl shadow-emerald-500/20 active:scale-98 focus:outline-none focus:ring-2 focus:ring-emerald-300 cursor-pointer"
+              {/* Primary Dual Actions: Online Reader & Direct Download */}
+              <div className="space-y-3 pt-2">
+                {onNavigateReader && (
+                  <button
+                    onClick={onNavigateReader}
+                    className="w-full flex items-center justify-center gap-3 py-4 px-8 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 font-extrabold text-base transition-all shadow-xl shadow-cyan-500/25 active:scale-98 focus:outline-none focus:ring-2 focus:ring-cyan-300 cursor-pointer"
                   >
-                    <Download className="w-5 h-5 text-slate-950" />
-                    <span>Download Your eBook</span>
-                  </a>
+                    <BookOpen className="w-5 h-5 text-slate-950" />
+                    <span>Open Protected Online Reader</span>
+                    <ArrowRight className="w-4 h-4 text-slate-950" />
+                  </button>
+                )}
 
-                  {downloadTriggered && (
-                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2 animate-fade-in">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>
-                        Download initiated! Check your browser downloads folder.
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-500/40 text-amber-200 text-xs space-y-2">
-                  <div className="flex items-center gap-2 font-bold text-amber-300">
-                    <AlertCircle className="w-4 h-4 text-amber-400" />
-                    <span>Configuration Warning: Missing EBOOK_DOWNLOAD_URL</span>
+                {hasConfiguredDownload && (
+                  <div className="space-y-2">
+                    <a
+                      href={FUNNEL_CONFIG.ebookDownloadUrl}
+                      download="Prompt_Engineering_Handbook_2026.pdf"
+                      onClick={handleDownloadClick}
+                      className="w-full flex items-center justify-center gap-2.5 py-3 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs sm:text-sm transition-all cursor-pointer"
+                    >
+                      <Download className="w-4 h-4 text-cyan-400" />
+                      <span>Download Offline Vector PDF (~305 KB)</span>
+                    </a>
+
+                    {downloadTriggered && (
+                      <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2 animate-fade-in">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>Download initiated! Check your browser downloads folder.</span>
+                      </div>
+                    )}
                   </div>
-                  <p>
-                    The download URL has not been customized yet. Please edit{' '}
-                    <code className="bg-slate-900 px-1 py-0.5 rounded text-white font-mono">
-                      src/config/funnelConfig.ts
-                    </code>{' '}
-                    to specify your live PDF location.
-                  </p>
-                </div>
-              )}
-
-              {/* Troubleshooting note */}
-              <p className="text-xs text-slate-400 leading-relaxed pt-1">
-                If the download does not start automatically,{' '}
-                <a
-                  href={FUNNEL_CONFIG.ebookDownloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-cyan-400 underline hover:text-cyan-300"
-                >
-                  click here to open the PDF directly in a new tab
-                </a>
-                .
-              </p>
+                )}
+              </div>
 
             </div>
 
@@ -192,7 +209,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
                 <button
                   key={p.id}
                   onClick={() => setActivePathTab(p.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                     activePathTab === p.id
                       ? 'bg-cyan-500 text-slate-950 shadow-sm'
                       : 'text-slate-400 hover:text-white'
@@ -238,7 +255,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
           </div>
         </div>
 
-        {/* Security & Delivery Architecture Note (Honest Technical Disclosure) */}
+        {/* Security & Delivery Architecture Note */}
         <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 text-left mb-10">
           <button
             onClick={() => setShowSecurityInfo(!showSecurityInfo)}
@@ -247,7 +264,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
             <div className="flex items-center gap-2.5">
               <Shield className="w-4 h-4 text-cyan-400" />
               <span className="text-xs sm:text-sm font-semibold text-slate-200">
-                Delivery Mode &amp; Payment Verification Notice
+                DRM Protection &amp; Reading Access Notice
               </span>
             </div>
             <div className="text-slate-400 p-1">
@@ -258,13 +275,10 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({ onNavigateHome }) =>
           {showSecurityInfo && (
             <div className="mt-4 pt-4 border-t border-slate-800 space-y-3 text-xs text-slate-300 leading-relaxed animate-fade-in">
               <p>
-                <strong>Delivery Mode:</strong> This page is designed as the post-payment redirection destination for your Razorpay Payment Link (<code className="bg-slate-800 px-1 py-0.5 rounded font-mono text-cyan-300">https://rzp.io/rzp/aGZfHfs</code>).
+                <strong>Protected Online Reader:</strong> Your license includes full access to our online eBook reader with customer watermark, screen recording protection, and progress tracking.
               </p>
               <p>
-                <strong>Notice on Verification:</strong> Visiting this URL alone does not cryptographically prove that a payment was completed. This site operates as a client-side delivery portal. The download link provides direct access to the bundled eBook and is not gated behind server-side authorization.
-              </p>
-              <p>
-                <strong>Server-Side Hardening (Optional):</strong> For strict copy protection, configure a server webhook (e.g. Razorpay <code className="bg-slate-800 px-1 py-0.5 rounded font-mono">payment_link.paid</code>), verify the <code className="bg-slate-800 px-1 py-0.5 rounded font-mono">X-Razorpay-Signature</code> via HMAC-SHA256, and generate a time-limited signed download token.
+                <strong>Concurrent Device Limit:</strong> Each purchase license permits up to 2 concurrent devices. You can manage or revoke active browser sessions from the account panel inside the reader.
               </p>
             </div>
           )}

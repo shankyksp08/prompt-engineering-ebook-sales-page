@@ -23,6 +23,8 @@ import { FinalCta } from './components/FinalCta.tsx';
 import { Footer } from './components/Footer.tsx';
 import { ThankYouPage } from './components/ThankYouPage.tsx';
 import { AdminPortal } from './components/AdminPortal.tsx';
+import { ReaderPage } from './components/ReaderPage.tsx';
+import { CustomerLoginPage } from './components/CustomerLoginPage.tsx';
 import { ProductPreviewModal } from './components/ProductPreviewModal.tsx';
 import { PolicyModal, PolicyType } from './components/PolicyModal.tsx';
 
@@ -77,10 +79,34 @@ export default function App() {
     }
   };
 
+  // Route: /reader (Protected Online eBook Reader)
+  if (currentPath === '/reader' || currentPath.endsWith('/reader')) {
+    return (
+      <ReaderPage
+        onNavigateHome={() => navigate('/')}
+        onNavigateLogin={() => navigate('/login')}
+      />
+    );
+  }
+
+  // Route: /login (Customer Access Portal)
+  if (currentPath === '/login' || currentPath.endsWith('/login')) {
+    return (
+      <CustomerLoginPage
+        onNavigateHome={() => navigate('/')}
+        onLoginSuccess={() => navigate('/reader')}
+      />
+    );
+  }
+
   // Route: /thank-you (Customer Fulfillment Portal)
   if (currentPath === '/thank-you' || currentPath.endsWith('/thank-you')) {
     return (
-      <ThankYouPage onNavigateHome={() => navigate('/')} />
+      <ThankYouPage
+        onNavigateHome={() => navigate('/')}
+        onNavigateReader={() => navigate('/reader')}
+        onNavigateLogin={() => navigate('/login')}
+      />
     );
   }
 
@@ -90,6 +116,7 @@ export default function App() {
       <AdminPortal
         onNavigateHome={() => navigate('/')}
         onNavigateThankYou={() => navigate('/thank-you')}
+        onNavigateReader={() => navigate('/reader')}
       />
     );
   }

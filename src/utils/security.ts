@@ -36,6 +36,7 @@ export interface ReadingProgress {
   completedTopicIds: number[];
   bookmarkedTopicIds: number[];
   lastReadTopicId: number;
+  lastReadPage: number;
   lastReadTimestamp: number;
 }
 
@@ -265,16 +266,23 @@ export function revokeDeviceSession(targetDeviceId: string): CustomerLicense | n
  */
 export function getReadingProgress(): ReadingProgress {
   if (typeof window === 'undefined') {
-    return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadTimestamp: Date.now() };
+    return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadPage: 1, lastReadTimestamp: Date.now() };
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PROGRESS);
     if (!raw) {
-      return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadTimestamp: Date.now() };
+      return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadPage: 1, lastReadTimestamp: Date.now() };
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return {
+      completedTopicIds: parsed.completedTopicIds || [],
+      bookmarkedTopicIds: parsed.bookmarkedTopicIds || [],
+      lastReadTopicId: parsed.lastReadTopicId || 1,
+      lastReadPage: parsed.lastReadPage || 1,
+      lastReadTimestamp: parsed.lastReadTimestamp || Date.now(),
+    };
   } catch {
-    return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadTimestamp: Date.now() };
+    return { completedTopicIds: [], bookmarkedTopicIds: [], lastReadTopicId: 1, lastReadPage: 1, lastReadTimestamp: Date.now() };
   }
 }
 

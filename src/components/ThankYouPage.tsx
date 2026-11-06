@@ -40,20 +40,67 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
   const [activePathTab, setActivePathTab] = useState<'30-minute' | 'practical' | 'builder'>('30-minute');
   const [verifiedLicense, setVerifiedLicense] = useState<CustomerLicense | null>(() => getActiveLicense());
   const [detectedPaymentId, setDetectedPaymentId] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
 
-  // Check for Razorpay payment callback in query params
+  // Check for Razorpay payment callback in query params and verify server-side
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const parsed = parseRazorpayPaymentParams(window.location.search);
-      if (parsed.isPaid && parsed.paymentId) {
+      if (parsed.paymentId) {
         setDetectedPaymentId(parsed.paymentId);
-        const lic = createCustomerLicense('verified.customer@razorpay.com', parsed.paymentId, 'Handbook Customer');
-        setVerifiedLicense(lic);
+
+        // Check if payment status is explicitly paid/captured
+        if (!parsed.isPaid) {
+          setVerificationError('Payment is pending or unconfirmed. Access cannot be granted until transaction is captured.');
+          return;
+        }
+
+        setIsVerifying(true);
+        fetch('/api/verify-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paymentId: parsed.paymentId,
+            paymentLinkId: parsed.paymentLinkId,
+            status: parsed.status || 'paid',
+          }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.verified && data.license) {
+              const lic = createCustomerLicense(
+                data.license.customerEmail || 'verified.customer@razorpay.com',
+                data.license.paymentId,
+                data.license.customerName || 'Handbook Customer'
+              );
+              setVerifiedLicense(lic);
+              setVerificationError(null);
+            } else {
+              setVerificationError(data.message || 'Payment verification could not be completed.');
+            }
+          })
+          .catch(() => {
+            // If offline, check if existing active license exists in registry
+            const active = getActiveLicense();
+            if (active && active.status === 'active') {
+              setVerifiedLicense(active);
+            } else {
+              setVerificationError('Network error verifying payment with server.');
+            }
+          })
+          .finally(() => {
+            setIsVerifying(false);
+          });
       }
     }
   }, []);
 
   const hasConfiguredDownload = isDownloadConfigured(FUNNEL_CONFIG.ebookDownloadUrl);
+
+  const downloadUrl = verifiedLicense
+    ? `/api/download-ebook?token=${encodeURIComponent(verifiedLicense.token)}&orderId=${encodeURIComponent(verifiedLicense.orderId)}`
+    : FUNNEL_CONFIG.ebookDownloadUrl;
 
   const handleDownloadClick = () => {
     setDownloadTriggered(true);
@@ -163,16 +210,26 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                   </button>
                 )}
 
+                {verificationError && (
+                  <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-2.5 text-left">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-amber-300">Payment Status Notice</div>
+                      <div>{verificationError}</div>
+                    </div>
+                  </div>
+                )}
+
                 {hasConfiguredDownload && (
                   <div className="space-y-2">
                     <a
-                      href={FUNNEL_CONFIG.ebookDownloadUrl}
-                      download="Prompt_Engineering_Handbook_2026.pdf"
+                      href={downloadUrl}
+                      download="Digital-Govind-Watermarked-eBook.pdf"
                       onClick={handleDownloadClick}
                       className="w-full flex items-center justify-center gap-2.5 py-3 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs sm:text-sm transition-all cursor-pointer"
                     >
                       <Download className="w-4 h-4 text-cyan-400" />
-                      <span>Download Offline Vector PDF (~305 KB)</span>
+                      <span>Download Offline Official Watermarked PDF (~477 KB)</span>
                     </a>
 
                     {downloadTriggered && (

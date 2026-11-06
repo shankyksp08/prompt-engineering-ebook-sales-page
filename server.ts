@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import razorpayWebhookHandler from './api/razorpay-webhook.ts';
 import verifyPaymentHandler from './api/verify-payment.ts';
 import testNotificationsHandler from './api/test-notifications.ts';
+import downloadEbookHandler from './api/download-ebook.ts';
+import streamPdfHandler from './api/stream-pdf.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +55,39 @@ async function startServer() {
       await testNotificationsHandler(req, res);
     } catch (err: any) {
       console.error('[Server] Test notifications route error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.all('/api/download-ebook', async (req, res) => {
+    try {
+      await downloadEbookHandler(req, res);
+    } catch (err: any) {
+      console.error('[Server] Download eBook route error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.all('/api/stream-pdf', async (req, res) => {
+    try {
+      await streamPdfHandler(req, res);
+    } catch (err: any) {
+      console.error('[Server] Stream PDF route error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.all('/api/reader/stream-pdf', async (req, res) => {
+    try {
+      await streamPdfHandler(req, res);
+    } catch (err: any) {
+      console.error('[Server] Reader stream PDF route error:', err);
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });
       }

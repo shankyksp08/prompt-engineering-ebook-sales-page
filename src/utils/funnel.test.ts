@@ -23,6 +23,7 @@ test('isValidDownloadUrl detects valid pdf files and local endpoints', () => {
   assert.equal(isValidDownloadUrl(''), false);
   assert.equal(isValidDownloadUrl('REPLACE_WITH_YOUR_EBOOK_DOWNLOAD_URL'), false);
   assert.equal(isValidDownloadUrl('/assets/aistudio/Prompt_Engineering_Handbook_d0bf9480.pdf'), true);
+  assert.equal(isValidDownloadUrl('/api/download-ebook'), true);
   assert.equal(isValidDownloadUrl('https://storage.googleapis.com/bucket/handbook.pdf'), true);
 });
 

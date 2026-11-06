@@ -21,6 +21,11 @@ import {
   AlertTriangle,
   Lock,
   ExternalLink,
+  ZoomIn,
+  ZoomOut,
+  Download,
+  FileText,
+  Layers,
 } from 'lucide-react';
 import { BOOK_PARTS, CURATED_TOPICS, BOOK_SAMPLE_PAGES } from '../data/bookData.ts';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
@@ -55,6 +60,11 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   const [securityToast, setSecurityToast] = useState<string | null>(null);
   const [fullScreen, setFullScreen] = useState(false);
 
+  const [viewMode, setViewMode] = useState<'pdf' | 'notes'>('pdf');
+  const [currentPage, setCurrentPage] = useState<number>(() => progress.lastReadPage || 1);
+  const [zoomPercent, setZoomPercent] = useState<number>(100);
+  const totalPages = 81;
+
   // Sync active license
   useEffect(() => {
     setLicense(getActiveLicense());
@@ -62,9 +72,25 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
 
   // Update last read topic in progress
   useEffect(() => {
-    const updated = saveReadingProgress({ lastReadTopicId: currentTopicId });
+    const updated = saveReadingProgress({ lastReadTopicId: currentTopicId, lastReadPage: currentPage });
     setProgress(updated);
-  }, [currentTopicId]);
+  }, [currentTopicId, currentPage]);
+
+  // Authenticated PDF stream URL (served strictly from private storage)
+  const pdfStreamUrl = useMemo(() => {
+    if (!license) return '';
+    const params = new URLSearchParams({
+      token: license.token,
+      orderId: license.orderId,
+    });
+    return `/api/reader/stream-pdf?${params.toString()}#page=${currentPage}&zoom=${zoomPercent}`;
+  }, [license, currentPage, zoomPercent]);
+
+  // Authenticated offline download URL
+  const offlineDownloadUrl = useMemo(() => {
+    if (!license) return '';
+    return `/api/download-ebook?token=${encodeURIComponent(license.token)}&orderId=${encodeURIComponent(license.orderId)}`;
+  }, [license]);
 
   // Anti-Screenshot & Screen Capture Deterrence Listeners
   useEffect(() => {
@@ -318,17 +344,39 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
             </button>
           </div>
 
-          {/* Center: Reading Progress Pill */}
-          <div className="hidden md:flex items-center gap-3 bg-slate-950 px-3.5 py-1.5 rounded-full border border-slate-800 text-xs">
-            <div className="w-20 bg-slate-800 h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-cyan-400 to-blue-500 h-full transition-all duration-300"
-                style={{ width: `${progressPercent}%` }}
-              />
+          {/* Center: Mode Switcher & Progress */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+              <button
+                onClick={() => setViewMode('pdf')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                  viewMode === 'pdf'
+                    ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>eBook PDF (81 Pages)</span>
+              </button>
+              <button
+                onClick={() => setViewMode('notes')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                  viewMode === 'notes'
+                    ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Topic Notes (100)</span>
+                <span className="sm:hidden">Notes</span>
+              </button>
             </div>
-            <span className="text-[11px] font-mono text-slate-300">
-              {progress.completedTopicIds.length}/100 Completed ({progressPercent}%)
-            </span>
+
+            <div className="hidden xl:flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-full border border-slate-800 text-xs">
+              <span className="text-[11px] font-mono text-cyan-400">
+                {viewMode === 'pdf' ? `Page ${currentPage} / ${totalPages}` : `${progress.completedTopicIds.length}/100 Complete`}
+              </span>
+            </div>
           </div>
 
           {/* Right: Display Settings & Customer Session */}
@@ -428,6 +476,9 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   key={topic.id}
                   onClick={() => {
                     setCurrentTopicId(topic.id);
+                    if ((topic as { page?: number }).page) {
+                      setCurrentPage((topic as { page?: number }).page || 1);
+                    }
                     setSidebarOpen(false);
                   }}
                   className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left text-xs transition-all cursor-pointer ${
@@ -467,145 +518,330 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
           />
         )}
 
-        {/* Active Topic Content Pane */}
-        <main className="flex-1 p-4 sm:p-8 lg:p-12 max-w-4xl mx-auto w-full">
+        {/* Active Reader Content Pane */}
+        <main className="flex-1 p-3 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full">
           
-          <div className={`rounded-3xl border ${contentBg} p-6 sm:p-10 shadow-2xl relative overflow-hidden transition-all`}>
-            
-            {/* Header: Part info & Topic page */}
-            <div className="flex items-center justify-between gap-4 border-b border-slate-800/80 pb-4 mb-6 text-xs font-mono">
-              <span className="text-amber-400 uppercase tracking-wider font-semibold">
-                PART {currentTopic.partNumber}: {currentTopic.partTitle}
-              </span>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleToggleBookmark}
-                  className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                    isBookmarked
-                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                      : 'border-slate-800 text-slate-500 hover:text-slate-300'
-                  }`}
-                  title={isBookmarked ? 'Bookmarked' : 'Add Bookmark'}
-                >
-                  <Bookmark className={`w-3.5 h-3.5 ${isBookmarked ? 'fill-amber-400' : ''}`} />
-                </button>
+          {viewMode === 'pdf' ? (
+            /* Dedicated Watermarked eBook PDF Reader */
+            <div className="space-y-4">
+              
+              {/* PDF Reader Toolbar */}
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                
+                {/* Page Navigation */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
+                    title="Previous Page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    <span className="hidden sm:inline">Prev</span>
+                  </button>
 
-                <button
-                  onClick={handleToggleComplete}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs transition-colors cursor-pointer ${
-                    isCompleted
-                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                      : 'border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{isCompleted ? 'Completed' : 'Mark Complete'}</span>
-                </button>
+                  <div className="flex items-center gap-1.5 font-mono bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-white">
+                    <span>Page</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={currentPage}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val) && val >= 1 && val <= totalPages) {
+                          setCurrentPage(val);
+                        }
+                      }}
+                      className="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-cyan-400 font-bold focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                    />
+                    <span className="text-slate-400">/ {totalPages}</span>
+                  </div>
+
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
+                    title="Next Page"
+                  >
+                    <span className="hidden sm:inline">Next</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Zoom Controls */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  <button
+                    onClick={() => setZoomPercent((z) => Math.max(50, z - 15))}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                    title="Zoom Out"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <span className="px-2 font-mono text-[11px] text-cyan-400 font-semibold min-w-[48px] text-center">
+                    {zoomPercent}%
+                  </span>
+                  <button
+                    onClick={() => setZoomPercent((z) => Math.min(200, z + 15))}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                    title="Zoom In"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Actions: Download Offline Copy & Fullscreen */}
+                <div className="flex items-center gap-2 ml-auto">
+                  <a
+                    href={offlineDownloadUrl}
+                    download="Digital-Govind-Watermarked-eBook.pdf"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/25 transition-all text-xs font-semibold cursor-pointer"
+                    title="Download offline watermarked PDF copy"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Download PDF (~477 KB)</span>
+                    <span className="sm:hidden">Download</span>
+                  </a>
+
+                  <button
+                    onClick={() => setFullScreen(!fullScreen)}
+                    className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800/80 hover:bg-slate-800 transition-colors"
+                    title={fullScreen ? 'Exit Fullscreen' : 'Fullscreen View'}
+                  >
+                    {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  </button>
+                </div>
+
               </div>
-            </div>
 
-            {/* Topic Title */}
-            <div className="mb-6">
-              <div className="text-[11px] font-mono text-cyan-400 uppercase tracking-widest mb-1">
-                TOPIC {currentTopic.id} OF 100
+              {/* Quick Jump Bar by Chapters */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-mono scrollbar-none">
+                <span className="text-slate-500 uppercase tracking-wider shrink-0 px-1">Quick Jump:</span>
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                    currentPage === 1 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Cover (p. 1)
+                </button>
+                <button
+                  onClick={() => setCurrentPage(5)}
+                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                    currentPage === 5 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Contents (p. 5)
+                </button>
+                <button
+                  onClick={() => setCurrentPage(9)}
+                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                    currentPage === 9 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Preface (p. 9)
+                </button>
+                {BOOK_PARTS.map((part) => (
+                  <button
+                    key={part.partNumber}
+                    onClick={() => setCurrentPage(part.page)}
+                    className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
+                      currentPage === part.page ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Part {part.partNumber} (p. {part.page})
+                  </button>
+                ))}
               </div>
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
-                {currentTopic.title}
-              </h1>
-            </div>
 
-            {/* Topic Content Body */}
-            <div
-              className={`space-y-4 leading-relaxed font-sans text-slate-300 ${
-                fontSize === 'sm' ? 'text-xs leading-6' : fontSize === 'lg' ? 'text-base leading-8' : 'text-sm leading-7'
-              }`}
-            >
-              {curatedDetail?.summary ? (
-                <p>{curatedDetail.summary}</p>
-              ) : sampleExcerpt?.excerpt ? (
-                <p className="whitespace-pre-line">{sampleExcerpt.excerpt}</p>
-              ) : (
-                <p>
-                  In this topic from Part {currentTopic.partNumber}, the Prompt Engineering Handbook explores{' '}
-                  <strong className="text-white">{currentTopic.title}</strong>. This section covers core mental models, common failure modes when communicating with frontier language models, and practical boundary constraints designed to produce dependable results.
-                </p>
-              )}
-
-              {/* Try This Prompt Interactive Snippet Block */}
-              {(curatedDetail?.tryPrompt || sampleExcerpt?.tryPromptSnippet) && (
-                <div className="mt-8 p-5 rounded-2xl bg-slate-950/90 border border-amber-500/30 relative">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      TRY THIS PROMPT
-                    </span>
+              {/* PDF Viewport Container */}
+              <div
+                className={`relative rounded-3xl border border-slate-800 bg-slate-950 overflow-hidden shadow-2xl transition-all ${
+                  fullScreen ? 'fixed inset-4 z-50 bg-slate-950 flex flex-col' : ''
+                }`}
+              >
+                {fullScreen && (
+                  <div className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center text-xs">
+                    <span className="font-mono text-cyan-400">Digital Govind – Fullscreen Reader (Page {currentPage} of {totalPages})</span>
                     <button
-                      onClick={() =>
-                        handleCopyPrompt(
-                          curatedDetail?.tryPrompt?.text || sampleExcerpt?.tryPromptSnippet || ''
-                        )
-                      }
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors cursor-pointer"
+                      onClick={() => setFullScreen(false)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 text-white"
                     >
-                      {copiedPrompt ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-emerald-300">Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Copy Prompt</span>
-                        </>
-                      )}
+                      <Minimize2 className="w-3.5 h-3.5" />
+                      <span>Close Fullscreen</span>
                     </button>
                   </div>
+                )}
 
-                  <pre className="text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
-                    {curatedDetail?.tryPrompt?.text || sampleExcerpt?.tryPromptSnippet}
-                  </pre>
+                <iframe
+                  key={`${currentPage}-${zoomPercent}`}
+                  src={pdfStreamUrl}
+                  title="Digital Govind Prompt Engineering Handbook"
+                  className={`w-full bg-slate-900 border-0 ${fullScreen ? 'flex-1 h-full' : 'h-[75vh] min-h-[600px]'}`}
+                />
+              </div>
+
+              {/* Security & License Notice Under Reader */}
+              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <span>
+                    Licensed to <strong className="text-white">{license.customerEmail}</strong> · Order #{license.orderId}
+                  </span>
                 </div>
-              )}
+                <div className="flex items-center gap-3 text-[11px] font-mono">
+                  <span>Reading progress auto-saved</span>
+                  <a
+                    href={offlineDownloadUrl}
+                    download="Digital-Govind-Watermarked-eBook.pdf"
+                    className="text-cyan-400 hover:underline flex items-center gap-1"
+                  >
+                    <span>Direct PDF Download</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
 
-              {/* Pro Tip Callout */}
-              {curatedDetail?.proTip && (
-                <div className="mt-5 p-4 rounded-xl bg-cyan-950/30 border border-cyan-800/40 text-xs text-cyan-200 flex items-start gap-3">
-                  <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-white font-semibold">Pro Tip: </strong>
-                    {curatedDetail.proTip}
+            </div>
+          ) : (
+            /* Interactive Curated Topic Notes View */
+            <div className={`rounded-3xl border ${contentBg} p-6 sm:p-10 shadow-2xl relative overflow-hidden transition-all`}>
+              
+              {/* Header: Part info & Topic page */}
+              <div className="flex items-center justify-between gap-4 border-b border-slate-800/80 pb-4 mb-6 text-xs font-mono">
+                <span className="text-amber-400 uppercase tracking-wider font-semibold">
+                  PART {currentTopic.partNumber}: {currentTopic.partTitle}
+                </span>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleToggleBookmark}
+                    className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                      isBookmarked
+                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                        : 'border-slate-800 text-slate-500 hover:text-slate-300'
+                    }`}
+                    title={isBookmarked ? 'Bookmarked' : 'Add Bookmark'}
+                  >
+                    <Bookmark className={`w-3.5 h-3.5 ${isBookmarked ? 'fill-amber-400' : ''}`} />
+                  </button>
+
+                  <button
+                    onClick={handleToggleComplete}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs transition-colors cursor-pointer ${
+                      isCompleted
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                        : 'border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>{isCompleted ? 'Completed' : 'Mark Complete'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Topic Title */}
+              <div className="mb-6">
+                <div className="text-[11px] font-mono text-cyan-400 uppercase tracking-widest mb-1">
+                  TOPIC {currentTopic.id} OF 100
+                </div>
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight">
+                  {currentTopic.title}
+                </h1>
+              </div>
+
+              {/* Topic Content Body */}
+              <div
+                className={`space-y-4 leading-relaxed font-sans text-slate-300 ${
+                  fontSize === 'sm' ? 'text-xs leading-6' : fontSize === 'lg' ? 'text-base leading-8' : 'text-sm leading-7'
+                }`}
+              >
+                {curatedDetail?.summary ? (
+                  <p>{curatedDetail.summary}</p>
+                ) : sampleExcerpt?.excerpt ? (
+                  <p className="whitespace-pre-line">{sampleExcerpt.excerpt}</p>
+                ) : (
+                  <p>
+                    In this topic from Part {currentTopic.partNumber}, the Prompt Engineering Handbook explores{' '}
+                    <strong className="text-white">{currentTopic.title}</strong>. This section covers core mental models, common failure modes when communicating with frontier language models, and practical boundary constraints designed to produce dependable results.
+                  </p>
+                )}
+
+                {/* Try This Prompt Interactive Snippet Block */}
+                {(curatedDetail?.tryPrompt || sampleExcerpt?.tryPromptSnippet) && (
+                  <div className="mt-8 p-5 rounded-2xl bg-slate-950/90 border border-amber-500/30 relative">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        TRY THIS PROMPT
+                      </span>
+                      <button
+                        onClick={() =>
+                          handleCopyPrompt(
+                            curatedDetail?.tryPrompt?.text || sampleExcerpt?.tryPromptSnippet || ''
+                          )
+                        }
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors cursor-pointer"
+                      >
+                        {copiedPrompt ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-300">Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy Prompt</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    <pre className="text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                      {curatedDetail?.tryPrompt?.text || sampleExcerpt?.tryPromptSnippet}
+                    </pre>
                   </div>
-                </div>
-              )}
+                )}
+
+                {/* Pro Tip Callout */}
+                {curatedDetail?.proTip && (
+                  <div className="mt-5 p-4 rounded-xl bg-cyan-950/30 border border-cyan-800/40 text-xs text-cyan-200 flex items-start gap-3">
+                    <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-white font-semibold">Pro Tip: </strong>
+                      {curatedDetail.proTip}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+
+              {/* Footer Navigation Bar within Reader Content */}
+              <div className="mt-10 pt-6 border-t border-slate-800 flex items-center justify-between text-xs">
+                <button
+                  onClick={handlePrev}
+                  disabled={currentTopicId <= 1}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Previous Topic</span>
+                </button>
+
+                <span className="text-slate-500 font-mono text-[11px] hidden sm:inline">
+                  Topic {currentTopicId} of 100
+                </span>
+
+                <button
+                  onClick={handleNext}
+                  disabled={currentTopicId >= allTopics.length}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-bold transition-colors cursor-pointer"
+                >
+                  <span>Next Topic</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
 
             </div>
-
-            {/* Footer Navigation Bar within Reader Content */}
-            <div className="mt-10 pt-6 border-t border-slate-800 flex items-center justify-between text-xs">
-              <button
-                onClick={handlePrev}
-                disabled={currentTopicId <= 1}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Previous Topic</span>
-              </button>
-
-              <span className="text-slate-500 font-mono text-[11px] hidden sm:inline">
-                Topic {currentTopicId} of 100
-              </span>
-
-              <button
-                onClick={handleNext}
-                disabled={currentTopicId >= allTopics.length}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-bold transition-colors cursor-pointer"
-              >
-                <span>Next Topic</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-
-          </div>
+          )}
 
         </main>
       </div>

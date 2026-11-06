@@ -57,8 +57,8 @@ export const FUNNEL_CONFIG: FunnelConfig = {
   // Razorpay Payment Link connected to all purchase CTA buttons
   paymentUrl: "https://rzp.io/rzp/aGZfHfs",
 
-  // Bundled static PDF path in the repository
-  ebookDownloadUrl: "/assets/aistudio/Prompt_Engineering_Handbook_d0bf9480.pdf",
+  // Authenticated server-side eBook download endpoint (served from private storage)
+  ebookDownloadUrl: "/api/download-ebook",
 
   // The relative or deployed URL of your thank-you page
   thankYouUrl: "/thank-you",

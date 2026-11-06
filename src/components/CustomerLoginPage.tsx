@@ -37,39 +37,64 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
 
     setLoading(true);
 
-    setTimeout(() => {
-      // Check existing registered licenses
-      const registry = getRegisteredLicenses();
-      const match = registry.find(
-        (l) =>
-          l.customerEmail.toLowerCase() === cleanEmail ||
-          (orderOrPaymentId && (l.orderId.toLowerCase() === orderOrPaymentId.trim().toLowerCase() || l.paymentId.toLowerCase() === orderOrPaymentId.trim().toLowerCase()))
-      );
+    const checkAccess = async () => {
+      try {
+        // 1. Check existing verified licenses in local storage registry
+        const registry = getRegisteredLicenses();
+        const match = registry.find(
+          (l) =>
+            l.customerEmail.toLowerCase() === cleanEmail && l.status === 'active' ||
+            (orderOrPaymentId &&
+              (l.orderId.toLowerCase() === orderOrPaymentId.trim().toLowerCase() ||
+                l.paymentId.toLowerCase() === orderOrPaymentId.trim().toLowerCase()))
+        );
 
-      if (match) {
-        // Restore license
-        createCustomerLicense(match.customerEmail, match.paymentId, match.customerName);
-        setSuccessMessage('Verified purchase found! Unlocking your eBook reader...');
-        setTimeout(() => {
-          onLoginSuccess();
-        }, 1000);
-      } else if (orderOrPaymentId) {
-        // Direct order ID or payment ID activation
-        createCustomerLicense(cleanEmail, orderOrPaymentId.trim(), 'Verified Reader');
-        setSuccessMessage('License successfully activated! Opening reader...');
-        setTimeout(() => {
-          onLoginSuccess();
-        }, 1000);
-      } else {
-        // Fallback for customer testing or standard direct access
-        createCustomerLicense(cleanEmail, 'direct_customer_access', 'Handbook Reader');
-        setSuccessMessage('Access granted! Opening protected reader...');
-        setTimeout(() => {
-          onLoginSuccess();
-        }, 1000);
+        if (match) {
+          // Existing customer retains access
+          createCustomerLicense(match.customerEmail, match.paymentId, match.customerName);
+          setSuccessMessage('Verified purchase confirmed! Opening eBook reader...');
+          setTimeout(() => {
+            onLoginSuccess();
+          }, 800);
+          return;
+        }
+
+        // 2. If Order/Payment ID provided, verify against server API
+        if (orderOrPaymentId) {
+          const res = await fetch('/api/verify-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              paymentId: orderOrPaymentId.trim(),
+              paymentLinkId: orderOrPaymentId.trim(),
+              status: 'paid',
+              email: cleanEmail,
+            }),
+          });
+
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.verified && data.license) {
+            createCustomerLicense(cleanEmail, orderOrPaymentId.trim(), data.license.customerName || 'Verified Reader');
+            setSuccessMessage('Payment verified! Access unlocked...');
+            setTimeout(() => {
+              onLoginSuccess();
+            }, 800);
+            return;
+          }
+        }
+
+        // 3. Unpaid or unverified customer access rejected
+        setErrorMessage(
+          'No verified purchase found for this email address. Please provide your Razorpay Payment ID or purchase the handbook from the sales page.'
+        );
+      } catch (err: any) {
+        setErrorMessage('Verification failed. Please check your network and try again.');
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-    }, 600);
+    };
+
+    checkAccess();
   };
 
   return (

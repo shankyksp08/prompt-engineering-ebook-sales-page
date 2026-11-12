@@ -2,6 +2,7 @@ import React from 'react';
 import { BookOpen, FileCheck2, LayoutGrid, Terminal, BookmarkCheck, Calendar, BookMarked, Search, ArrowRight } from 'lucide-react';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
 import { BookMockup } from './BookMockup.tsx';
+import { Reveal } from './motion/Reveal.tsx';
 
 interface WhatsIncludedProps {
   onBuyClick: () => void;
@@ -65,18 +66,20 @@ export const WhatsIncluded: React.FC<WhatsIncludedProps> = ({ onBuyClick, onPrev
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="max-w-3xl mx-auto text-center mb-16">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-mono uppercase tracking-wider mb-4">
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Complete Deliverable Package</span>
+        <Reveal>
+          <div className="max-w-3xl mx-auto text-center mb-16">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-mono uppercase tracking-wider mb-4">
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Complete Deliverable Package</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
+              What&apos;s Included in Your Purchase
+            </h2>
+            <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
+              Everything listed below is included in the actual PDF eBook file. No hidden extras, no separate subscriptions, and no fabricated bonus packs.
+            </p>
           </div>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-            What&apos;s Included in Your Purchase
-          </h2>
-          <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            Everything listed below is included in the actual PDF eBook file. No hidden extras, no separate subscriptions, and no fabricated bonus packs.
-          </p>
-        </div>
+        </Reveal>
 
         {/* Deliverables Grid with Central Visual */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center mb-16">
@@ -86,40 +89,45 @@ export const WhatsIncluded: React.FC<WhatsIncludedProps> = ({ onBuyClick, onPrev
             {deliverables.slice(0, 4).map((item, idx) => {
               const Icon = item.icon;
               return (
-                <div
-                  key={idx}
-                  className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 hover:border-slate-700 transition-colors shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
-                      <Icon className="w-4 h-4" />
+                <Reveal key={idx} staggerIndex={idx}>
+                  <div
+                    className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 hover:border-slate-700 transition-colors shadow-sm motion-card"
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <span className="text-[10px] font-mono text-amber-400 bg-slate-800/80 px-2 py-0.5 rounded">
+                        {item.detail}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-mono text-amber-400 bg-slate-800/80 px-2 py-0.5 rounded">
-                      {item.detail}
-                    </span>
+                    <h3 className="text-sm sm:text-base font-bold text-white mb-1">
+                      {item.title}
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {item.desc}
+                    </p>
                   </div>
-                  <h3 className="text-sm sm:text-base font-bold text-white mb-1">
-                    {item.title}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {item.desc}
-                  </p>
-                </div>
+                </Reveal>
               );
             })}
           </div>
 
           {/* Center Column (Book Mockup) */}
           <div className="lg:col-span-4 flex flex-col items-center justify-center py-6">
-            <BookMockup size="md" interactive={false} />
-            <div className="mt-4 text-center">
-              <span className="text-xs font-mono text-slate-400 block">
-                Instant delivery via PDF link
-              </span>
-              <span className="text-sm font-bold text-cyan-400 mt-1 block">
-                Instant one-time digital access
-              </span>
-            </div>
+            <Reveal delay={200}>
+              <div className="flex flex-col items-center">
+                <BookMockup size="md" interactive={false} />
+                <div className="mt-4 text-center">
+                  <span className="text-xs font-mono text-slate-400 block">
+                    Instant delivery via PDF link
+                  </span>
+                  <span className="text-sm font-bold text-cyan-400 mt-1 block">
+                    Instant one-time digital access
+                  </span>
+                </div>
+              </div>
+            </Reveal>
           </div>
 
           {/* Right Column (4 items) */}
@@ -127,25 +135,26 @@ export const WhatsIncluded: React.FC<WhatsIncludedProps> = ({ onBuyClick, onPrev
             {deliverables.slice(4, 8).map((item, idx) => {
               const Icon = item.icon;
               return (
-                <div
-                  key={idx}
-                  className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 hover:border-slate-700 transition-colors shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
-                      <Icon className="w-4 h-4" />
+                <Reveal key={idx} staggerIndex={idx}>
+                  <div
+                    className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 sm:p-5 hover:border-slate-700 transition-colors shadow-sm motion-card"
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <span className="text-[10px] font-mono text-amber-400 bg-slate-800/80 px-2 py-0.5 rounded">
+                        {item.detail}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-mono text-amber-400 bg-slate-800/80 px-2 py-0.5 rounded">
-                      {item.detail}
-                    </span>
+                    <h3 className="text-sm sm:text-base font-bold text-white mb-1">
+                      {item.title}
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {item.desc}
+                    </p>
                   </div>
-                  <h3 className="text-sm sm:text-base font-bold text-white mb-1">
-                    {item.title}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {item.desc}
-                  </p>
-                </div>
+                </Reveal>
               );
             })}
           </div>
@@ -153,21 +162,24 @@ export const WhatsIncluded: React.FC<WhatsIncludedProps> = ({ onBuyClick, onPrev
         </div>
 
         {/* Action Row */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
-          <button
-            onClick={onBuyClick}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-8 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-slate-950 font-extrabold text-sm sm:text-base shadow-lg shadow-cyan-500/25 transition-all cursor-pointer"
-          >
-            <span>Get This eBook</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onPreviewClick}
-            className="w-full sm:w-auto py-3.5 px-6 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
-          >
-            Inspect Sample Excerpts
-          </button>
-        </div>
+        <Reveal delay={150}>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <button
+              onClick={onBuyClick}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-8 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-slate-950 font-extrabold text-sm sm:text-base shadow-lg shadow-cyan-500/25 transition-all cursor-pointer motion-cta-btn relative overflow-hidden"
+            >
+              <div className="cta-shine absolute inset-0 pointer-events-none" />
+              <span>Get This eBook</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onPreviewClick}
+              className="w-full sm:w-auto py-3.5 px-6 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer motion-secondary-btn"
+            >
+              Inspect Sample Excerpts
+            </button>
+          </div>
+        </Reveal>
 
       </div>
     </section>

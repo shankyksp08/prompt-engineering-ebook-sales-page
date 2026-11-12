@@ -41,7 +41,7 @@ export const Footer: React.FC<FooterProps> = ({ onOpenPolicy }) => {
               <li>
                 <button
                   onClick={() => onOpenPolicy('refund')}
-                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer"
+                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer motion-link"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Refund Policy</span>
@@ -50,7 +50,7 @@ export const Footer: React.FC<FooterProps> = ({ onOpenPolicy }) => {
               <li>
                 <button
                   onClick={() => onOpenPolicy('privacy')}
-                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer"
+                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer motion-link"
                 >
                   <Shield className="w-3.5 h-3.5" />
                   <span>Privacy Policy</span>
@@ -59,7 +59,7 @@ export const Footer: React.FC<FooterProps> = ({ onOpenPolicy }) => {
               <li>
                 <button
                   onClick={() => onOpenPolicy('disclaimer')}
-                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer"
+                  className="hover:text-cyan-400 transition-colors flex items-center gap-1.5 text-left cursor-pointer motion-link"
                 >
                   <AlertCircle className="w-3.5 h-3.5" />
                   <span>Disclaimer</span>
@@ -79,7 +79,7 @@ export const Footer: React.FC<FooterProps> = ({ onOpenPolicy }) => {
           <div>
             <a
               href="mailto:supportdigitalgovind@gmail.com"
-              className="text-slate-400 hover:text-cyan-400 transition-colors"
+              className="text-slate-400 hover:text-cyan-400 transition-colors motion-link"
             >
               supportdigitalgovind@gmail.com
             </a>

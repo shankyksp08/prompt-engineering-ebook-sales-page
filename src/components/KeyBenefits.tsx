@@ -1,5 +1,6 @@
 import React from 'react';
 import { Target, Layers, RefreshCw, Briefcase, FileCode2, ShieldAlert } from 'lucide-react';
+import { Reveal } from './motion/Reveal.tsx';
 
 export const KeyBenefits: React.FC = () => {
   const benefits = [
@@ -40,39 +41,42 @@ export const KeyBenefits: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Header */}
-        <div className="max-w-3xl mx-auto text-center mb-16">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-mono uppercase tracking-wider mb-4">
-            <span>Practical Learning Outcomes</span>
+        <Reveal>
+          <div className="max-w-3xl mx-auto text-center mb-16">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-mono uppercase tracking-wider mb-4">
+              <span>Practical Learning Outcomes</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
+              Built for Real-World Competence, Not Hype
+            </h2>
+            <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
+              The handbook does not promise overnight fortunes or artificial certifications. It provides durable principles and tested recipes that make your everyday AI workflows faster, cleaner, and more reliable.
+            </p>
           </div>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-            Built for Real-World Competence, Not Hype
-          </h2>
-          <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            The handbook does not promise overnight fortunes or artificial certifications. It provides durable principles and tested recipes that make your everyday AI workflows faster, cleaner, and more reliable.
-          </p>
-        </div>
+        </Reveal>
 
         {/* Benefit Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
           {benefits.map((b, idx) => {
             const Icon = b.icon;
             return (
-              <div
-                key={idx}
-                className="bg-slate-900/80 border border-slate-800 hover:border-cyan-500/30 rounded-2xl p-6 sm:p-7 transition-all duration-300 flex flex-col justify-between group shadow-sm hover:shadow-cyan-500/5"
-              >
-                <div>
-                  <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 w-fit mb-5 group-hover:scale-105 transition-transform">
-                    <Icon className="w-5 h-5" />
+              <Reveal key={idx} staggerIndex={idx}>
+                <div
+                  className="bg-slate-900/80 border border-slate-800 hover:border-cyan-500/30 rounded-2xl p-6 sm:p-7 transition-all duration-300 flex flex-col justify-between group shadow-sm hover:shadow-cyan-500/5 motion-card h-full"
+                >
+                  <div>
+                    <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 w-fit mb-5 group-hover:scale-105 transition-transform">
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <h3 className="text-base sm:text-lg font-bold text-white mb-2.5">
+                      {b.title}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
+                      {b.description}
+                    </p>
                   </div>
-                  <h3 className="text-base sm:text-lg font-bold text-white mb-2.5">
-                    {b.title}
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
-                    {b.description}
-                  </p>
                 </div>
-              </div>
+              </Reveal>
             );
           })}
         </div>

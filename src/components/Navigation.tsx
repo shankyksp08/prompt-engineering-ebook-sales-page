@@ -87,14 +87,14 @@ export const Navigation: React.FC<NavigationProps> = ({
               <a
                 key={link.href}
                 href={link.href}
-                className="hover:text-cyan-400 transition-colors py-1 focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded"
+                className="hover:text-cyan-400 transition-colors py-1 focus:outline-none focus:ring-1 focus:ring-cyan-500 rounded motion-link"
               >
                 {link.label}
               </a>
             ))}
             <button
               onClick={onPreviewClick}
-              className="text-slate-300 hover:text-white flex items-center gap-1.5 py-1 px-2.5 rounded-lg border border-slate-700/80 hover:bg-slate-800 transition-colors"
+              className="text-slate-300 hover:text-white flex items-center gap-1.5 py-1 px-2.5 rounded-lg border border-slate-700/80 hover:bg-slate-800 transition-colors motion-secondary-btn cursor-pointer"
             >
               <BookOpen className="w-3.5 h-3.5 text-amber-400" />
               <span>Sample Pages</span>
@@ -108,7 +108,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <a
               href={FUNNEL_CONFIG.ebookDownloadUrl}
               download
-              className="flex items-center gap-2 py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-xs sm:text-sm transition-all shadow-md shadow-emerald-500/20 focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
+              className="flex items-center gap-2 py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-xs sm:text-sm transition-all shadow-md shadow-emerald-500/20 focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer motion-cta-btn"
             >
               <span>Download PDF</span>
               <ArrowRight className="w-3.5 h-3.5" />

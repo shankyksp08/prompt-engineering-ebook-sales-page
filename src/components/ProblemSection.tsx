@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertCircle, HelpCircle, Repeat, FileSpreadsheet, XCircle } from 'lucide-react';
+import { Reveal } from './motion/Reveal.tsx';
 
 export const ProblemSection: React.FC = () => {
   const problems = [
@@ -40,64 +41,69 @@ export const ProblemSection: React.FC = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="max-w-3xl mx-auto text-center mb-12 sm:mb-16">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-mono uppercase tracking-wider mb-4">
-            <span>Common AI Frustrations</span>
+        <Reveal>
+          <div className="max-w-3xl mx-auto text-center mb-12 sm:mb-16">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-mono uppercase tracking-wider mb-4">
+              <span>Common AI Frustrations</span>
+            </div>
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
+              Why Most People Struggle to Get Reliable Answers from AI
+            </h2>
+            <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
+              AI language models are more capable than ever, but prompt quality still determines output quality. These are the five most frequent obstacles readers face before mastering structured prompting.
+            </p>
           </div>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight">
-            Why Most People Struggle to Get Reliable Answers from AI
-          </h2>
-          <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            AI language models are more capable than ever, but prompt quality still determines output quality. These are the five most frequent obstacles readers face before mastering structured prompting.
-          </p>
-        </div>
+        </Reveal>
 
         {/* Problem Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {problems.map((prob, i) => {
             const Icon = prob.icon;
             return (
-              <div
-                key={i}
-                className="bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-2xl p-6 transition-all duration-300 flex flex-col justify-between group"
-              >
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="p-2.5 rounded-xl bg-slate-800/80 text-rose-400 border border-slate-700/60 group-hover:bg-rose-500/10 group-hover:border-rose-500/30 transition-colors">
-                      <Icon className="w-5 h-5" />
+              <Reveal key={i} staggerIndex={i}>
+                <div
+                  className="bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-2xl p-6 transition-all duration-300 flex flex-col justify-between group motion-card h-full"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="p-2.5 rounded-xl bg-slate-800/80 text-rose-400 border border-slate-700/60 group-hover:bg-rose-500/10 group-hover:border-rose-500/30 transition-colors">
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50">
+                        Addressed in {prob.highlight}
+                      </span>
                     </div>
-                    <span className="text-[10px] font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50">
-                      Addressed in {prob.highlight}
-                    </span>
+                    <h3 className="text-base sm:text-lg font-bold text-white mb-2 leading-snug">
+                      {prob.title}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
+                      {prob.description}
+                    </p>
                   </div>
-                  <h3 className="text-base sm:text-lg font-bold text-white mb-2 leading-snug">
-                    {prob.title}
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
-                    {prob.description}
-                  </p>
                 </div>
-              </div>
+              </Reveal>
             );
           })}
 
           {/* Solution Teaser Card */}
-          <div className="bg-gradient-to-br from-cyan-950/40 via-slate-900 to-slate-900 border border-cyan-800/40 rounded-2xl p-6 flex flex-col justify-between">
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-semibold block mb-2">
-                The Core Shift
-              </span>
-              <h3 className="text-base sm:text-lg font-bold text-white mb-2 leading-snug">
-                From Casual Chatting to Disciplined Prompt Engineering
-              </h3>
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                You do not need arcane &ldquo;magic keywords.&rdquo; You need a clear mental model of how language models interpret instructions, structured delimiters, and systematic evaluation.
-              </p>
+          <Reveal staggerIndex={problems.length}>
+            <div className="bg-gradient-to-br from-cyan-950/40 via-slate-900 to-slate-900 border border-cyan-800/40 rounded-2xl p-6 flex flex-col justify-between motion-card h-full">
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-semibold block mb-2">
+                  The Core Shift
+                </span>
+                <h3 className="text-base sm:text-lg font-bold text-white mb-2 leading-snug">
+                  From Casual Chatting to Disciplined Prompt Engineering
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  You do not need arcane &ldquo;magic keywords.&rdquo; You need a clear mental model of how language models interpret instructions, structured delimiters, and systematic evaluation.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-slate-800 text-xs text-cyan-300 font-medium">
+                Every chapter in the handbook turns vague requests into precise instructions.
+              </div>
             </div>
-            <div className="mt-4 pt-3 border-t border-slate-800 text-xs text-cyan-300 font-medium">
-              Every chapter in the handbook turns vague requests into precise instructions.
-            </div>
-          </div>
+          </Reveal>
         </div>
 
       </div>

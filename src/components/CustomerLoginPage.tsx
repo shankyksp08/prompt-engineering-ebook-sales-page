@@ -74,7 +74,13 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
 
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.verified && data.license) {
-            createCustomerLicense(cleanEmail, orderOrPaymentId.trim(), data.license.customerName || 'Verified Reader');
+            createCustomerLicense(
+              cleanEmail,
+              orderOrPaymentId.trim(),
+              data.license.customerName || 'Verified Reader',
+              data.license.token,
+              data.license.orderId
+            );
             setSuccessMessage('Payment verified! Access unlocked...');
             setTimeout(() => {
               onLoginSuccess();

@@ -112,6 +112,7 @@ export function parseRazorpayPaymentParams(search: string): {
   paymentId?: string;
   paymentLinkId?: string;
   status?: string;
+  signature?: string;
   isPaid: boolean;
 } {
   if (!search) return { isPaid: false };
@@ -119,14 +120,16 @@ export function parseRazorpayPaymentParams(search: string): {
   const paymentId = params.get('razorpay_payment_id') || undefined;
   const paymentLinkId = params.get('razorpay_payment_link_id') || undefined;
   const status = params.get('razorpay_payment_link_status') || undefined;
+  const signature = params.get('razorpay_signature') || undefined;
 
-  // Paid if status explicitly says 'paid' and a payment ID is present
-  const isPaid = (status === 'paid' || status === 'captured') && Boolean(paymentId);
+  // Has payment ID
+  const isPaid = Boolean(paymentId);
 
   return {
     paymentId,
     paymentLinkId,
     status,
+    signature,
     isPaid,
   };
 }
@@ -161,15 +164,18 @@ export function saveRegisteredLicense(license: CustomerLicense): void {
 export function createCustomerLicense(
   email: string,
   paymentId: string,
-  name?: string
+  name?: string,
+  serverToken?: string,
+  serverOrderId?: string
 ): CustomerLicense {
   const currentDevice = getOrCreateDeviceId();
   const info = getDeviceInfo();
   const verifiedAt = Date.now();
-  const token = generateLicenseToken(email, paymentId, verifiedAt);
+  const token = serverToken || generateLicenseToken(email, paymentId, verifiedAt);
+  const orderId = serverOrderId || ('ORD-' + hashSimple(`${email}-${paymentId}`).toUpperCase());
 
   const license: CustomerLicense = {
-    orderId: 'ORD-' + hashSimple(`${email}-${paymentId}`).toUpperCase(),
+    orderId,
     paymentId,
     customerEmail: email.toLowerCase().trim(),
     customerName: name || 'Valued Reader',

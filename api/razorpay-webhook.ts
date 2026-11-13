@@ -17,6 +17,8 @@ import {
   dispatchPurchaseNotifications,
   notificationStore,
 } from '../src/server/notifications/notificationService.ts';
+import { generateLicenseToken } from '../src/server/auth/licenseVerifier.ts';
+import { orderFulfillmentStore } from '../src/server/razorpay/orderStore.ts';
 
 // Helper to extract raw body buffer from various request representations
 async function getRawBody(req: any): Promise<string> {
@@ -126,6 +128,49 @@ export default async function handler(req: any, res: any) {
       smsSent: result.sms.sent,
       smsProvider: result.sms.provider,
     });
+
+    // Register in orderFulfillmentStore if not already present
+    if (!orderFulfillmentStore.hasPayment(paymentId)) {
+      const token = generateLicenseToken({
+        orderId,
+        customerEmail,
+        paymentId,
+        expiresInDays: 365,
+      });
+
+      const license = {
+        orderId,
+        paymentId,
+        customerEmail,
+        customerName: customerName || 'Valued Reader',
+        customerPhone: customerPhone || undefined,
+        amount: '₹99',
+        currency: 'INR',
+        verifiedAt: Date.now(),
+        token,
+        status: 'active' as const,
+        maxDevices: 2,
+        downloadUrl: `/api/download-ebook?token=${encodeURIComponent(token)}&orderId=${encodeURIComponent(orderId)}`,
+        readerStreamUrl: `/api/stream-pdf?token=${encodeURIComponent(token)}&orderId=${encodeURIComponent(orderId)}`,
+      };
+
+      orderFulfillmentStore.set({
+        orderId,
+        paymentId,
+        customerEmail,
+        customerName: customerName || 'Valued Reader',
+        customerPhone: customerPhone || undefined,
+        amountPaise: amount,
+        amountFormatted: '₹99',
+        currency: 'INR',
+        verifiedAt: Date.now(),
+        licenseToken: token,
+        license,
+        status: 'fulfilled',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     return res.status(200).json({
       received: true,

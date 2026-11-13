@@ -34,7 +34,7 @@ export default async function handler(req: any, res: any) {
   if (!authCheck.authorized) {
     return res.status(401).json({
       error: 'Unauthorized Access',
-      message: 'A verified purchase license token is required to download this eBook. Please authenticate your purchase.',
+      message: authCheck.reason || 'A verified purchase license token is required to download this eBook. Please authenticate your purchase.',
     });
   }
 

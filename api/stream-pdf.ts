@@ -35,7 +35,7 @@ export default async function handler(req: any, res: any) {
   if (!authCheck.authorized) {
     return res.status(401).json({
       error: 'Unauthorized Access',
-      message: 'A valid customer license token is required to read this eBook. Please log in or verify your purchase.',
+      message: authCheck.reason || 'A valid customer license token is required to read this eBook. Please log in or verify your purchase.',
     });
   }
 

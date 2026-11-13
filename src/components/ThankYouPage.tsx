@@ -63,6 +63,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
           body: JSON.stringify({
             paymentId: parsed.paymentId,
             paymentLinkId: parsed.paymentLinkId,
+            signature: parsed.signature,
             status: parsed.status || 'paid',
           }),
         })
@@ -72,7 +73,9 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
               const lic = createCustomerLicense(
                 data.license.customerEmail || 'verified.customer@razorpay.com',
                 data.license.paymentId,
-                data.license.customerName || 'Handbook Customer'
+                data.license.customerName || 'Handbook Customer',
+                data.license.token,
+                data.license.orderId
               );
               setVerifiedLicense(lic);
               setVerificationError(null);

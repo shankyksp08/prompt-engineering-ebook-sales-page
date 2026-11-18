@@ -13,10 +13,10 @@
 
 import fs from 'node:fs';
 import {
-  authorizeEbookAccess,
+  authorizeActiveSession,
+  clearSessionCookieHeader,
   OFFICIAL_EBOOK_PATH,
 } from '../src/server/auth/licenseVerifier.ts';
-import { orderFulfillmentStore } from '../src/server/razorpay/orderStore.ts';
 
 const REQUIRED_READER_HEADER = 'dg-online-reader-v1';
 
@@ -45,14 +45,14 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const { token, orderId, paymentId } = req.query || {};
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const headerOrderId = req.headers['x-order-id'] || req.headers['X-Order-Id'];
+  const hasCookie = Boolean(req.headers['cookie'] || req.headers['Cookie']);
 
-  // On full content GET requests, strictly require Authorization header + Online Reader session header
+  // On full content GET requests, strictly require Online Reader session header + credential
   // (never stream raw PDF bytes via bare query-string URLs).
   if (req.method === 'GET') {
-    if (readerSessionHeader !== REQUIRED_READER_HEADER || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+    const hasBearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ');
+    if (readerSessionHeader !== REQUIRED_READER_HEADER || (!hasBearer && !hasCookie)) {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(403).json({
         error: 'Online Reader Session Required',
@@ -61,31 +61,24 @@ export default async function handler(req: any, res: any) {
     }
   }
 
-  const authCheck = authorizeEbookAccess({
-    token: req.method === 'HEAD' && typeof token === 'string' ? token : undefined,
-    orderId:
-      typeof headerOrderId === 'string'
-        ? headerOrderId
-        : typeof orderId === 'string'
-          ? orderId
-          : undefined,
-    paymentId: typeof paymentId === 'string' ? paymentId : undefined,
-    authorization: typeof authHeader === 'string' ? authHeader : undefined,
+  const authCheck = await authorizeActiveSession(req, {
+    allowQueryToken: req.method === 'HEAD',
   });
 
   if (!authCheck.authorized || !authCheck.payload) {
-    return res.status(401).json({
-      error: 'Unauthorized Access',
-      message: authCheck.reason || 'A valid customer license token is required to read this eBook. Please sign in.',
-    });
-  }
-
-  // Enforce server-side order revocation / refund checks when tracked in memory
-  const recordedOrder = orderFulfillmentStore.getByPaymentId(authCheck.payload.paymentId);
-  if (recordedOrder && (recordedOrder.status === 'revoked' || recordedOrder.status === 'refunded')) {
-    return res.status(403).json({
-      error: 'License Revoked',
-      message: 'Access for this order has been revoked or refunded.',
+    res.setHeader('Cache-Control', 'no-store');
+    if (authCheck.statusCode === 401) {
+      res.setHeader('Set-Cookie', clearSessionCookieHeader(req));
+    }
+    if (req.method === 'HEAD') {
+      return res.status(authCheck.statusCode).end();
+    }
+    return res.status(authCheck.statusCode).json({
+      error: authCheck.error || 'Unauthorized Access',
+      code: authCheck.code || 'SESSION_ENDED',
+      message:
+        authCheck.message ||
+        'A valid customer license token is required to read this eBook. Please sign in.',
     });
   }
 

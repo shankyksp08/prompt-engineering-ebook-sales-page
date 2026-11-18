@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { toolkitProgressStore } from './toolkitProgressStore.ts';
 import { generateLicenseToken } from '../auth/licenseVerifier.ts';
+import { activeSessionStore } from '../auth/sessionStore.ts';
 import {
   createEmptyToolkitProgress,
   toggleTaskInProgress,
@@ -60,8 +61,10 @@ test('toolkitProgressStore persists across simulated cold restarts / device chan
 test('/api/toolkit-progress blocks unauthenticated access and binds storage to signed customer email', async () => {
   const prevSecret = process.env.LICENSE_SIGNING_SECRET;
   const tempFile = path.join(os.tmpdir(), `dg-toolkit-api-${Date.now()}.json`);
+  const tempSessionFile = path.join(os.tmpdir(), `dg-toolkit-sess-${Date.now()}.json`);
   process.env.LICENSE_SIGNING_SECRET = 'test_toolkit_signing_secret_32_chars_min';
   toolkitProgressStore.setStorageFilePathForTests(tempFile);
+  activeSessionStore.setStorageFilePathForTests(tempSessionFile);
 
   try {
     // 1. Reject missing token
@@ -72,11 +75,18 @@ test('/api/toolkit-progress blocks unauthenticated access and binds storage to s
     );
     assert.equal(unauthRes.statusCode, 401);
 
-    // 2. Authenticate with real HMAC token
-    const token = generateLicenseToken({
+    // 2. Authenticate Device 1 with real active-session HMAC token
+    const sess1 = await activeSessionStore.issueSingleSession({
+      customerEmail: 'verified.buyer@digitalgovind.in',
+      orderId: 'ORD_TOOLKIT_01',
+      paymentId: 'pay_toolkit_01',
+      deviceLabel: 'Device 1',
+    });
+    const token1 = generateLicenseToken({
       orderId: 'ORD_TOOLKIT_01',
       customerEmail: 'verified.buyer@digitalgovind.in',
       paymentId: 'pay_toolkit_01',
+      sessionId: sess1.activeSessionId!,
     });
 
     const initialProgress = toggleTaskInProgress(createEmptyToolkitProgress(), 'w1-t2', 55555);
@@ -85,7 +95,7 @@ test('/api/toolkit-progress blocks unauthenticated access and binds storage to s
       {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${token}`,
+          authorization: `Bearer ${token1}`,
           'x-order-id': 'ORD_TOOLKIT_01',
         },
         body: {
@@ -98,14 +108,27 @@ test('/api/toolkit-progress blocks unauthenticated access and binds storage to s
     assert.equal(postRes.statusCode, 200);
     assert.equal(postRes.body.customerEmail, 'verified.buyer@digitalgovind.in');
 
-    // 3. Simulate logging in from another device (fresh memory cache) and GET restored progress
+    // 3. Simulate logging in from Device 2 -> restores toolkit progress and invalidates Device 1
+    const sess2 = await activeSessionStore.issueSingleSession({
+      customerEmail: 'verified.buyer@digitalgovind.in',
+      orderId: 'ORD_TOOLKIT_01',
+      paymentId: 'pay_toolkit_01',
+      deviceLabel: 'Device 2',
+    });
+    const token2 = generateLicenseToken({
+      orderId: 'ORD_TOOLKIT_01',
+      customerEmail: 'verified.buyer@digitalgovind.in',
+      paymentId: 'pay_toolkit_01',
+      sessionId: sess2.activeSessionId!,
+    });
+
     toolkitProgressStore.clearMemoryForTests();
     const getRes = createMockResponse();
     await toolkitProgressHandler(
       {
         method: 'GET',
         headers: {
-          authorization: `Bearer ${token}`,
+          authorization: `Bearer ${token2}`,
           'x-order-id': 'ORD_TOOLKIT_01',
         },
       },
@@ -114,9 +137,25 @@ test('/api/toolkit-progress blocks unauthenticated access and binds storage to s
     assert.equal(getRes.statusCode, 200);
     assert.deepEqual(getRes.body.progress.completedTaskIds, ['w1-t2']);
     assert.equal(getRes.body.progress.lastCompletedActivity?.taskId, 'w1-t2');
+
+    // 4. Old Device 1 must now lose access to toolkit progress
+    const oldDeviceRes = createMockResponse();
+    await toolkitProgressHandler(
+      {
+        method: 'GET',
+        headers: {
+          authorization: `Bearer ${token1}`,
+          'x-order-id': 'ORD_TOOLKIT_01',
+        },
+      },
+      oldDeviceRes
+    );
+    assert.equal(oldDeviceRes.statusCode, 401);
   } finally {
     toolkitProgressStore.setStorageFilePathForTests(null);
+    activeSessionStore.setStorageFilePathForTests(null);
     if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    if (fs.existsSync(tempSessionFile)) fs.unlinkSync(tempSessionFile);
     if (prevSecret === undefined) delete process.env.LICENSE_SIGNING_SECRET;
     else process.env.LICENSE_SIGNING_SECRET = prevSecret;
   }

@@ -9,8 +9,10 @@
  *   so customers restore their progress seamlessly across devices and sessions.
  */
 
-import { authorizeEbookAccess } from '../src/server/auth/licenseVerifier.ts';
-import { orderFulfillmentStore } from '../src/server/razorpay/orderStore.ts';
+import {
+  authorizeActiveSession,
+  clearSessionCookieHeader,
+} from '../src/server/auth/licenseVerifier.ts';
 import { toolkitProgressStore } from '../src/server/toolkit/toolkitProgressStore.ts';
 import { sanitizeToolkitProgress } from '../src/utils/toolkitProgress.ts';
 
@@ -22,28 +24,18 @@ export default async function handler(req: any, res: any) {
 
   res.setHeader('Cache-Control', 'no-store');
 
-  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  const headerOrderId = req.headers['x-order-id'] || req.headers['X-Order-Id'];
-
-  const authCheck = authorizeEbookAccess({
-    authorization: typeof authHeader === 'string' ? authHeader : undefined,
-    orderId: typeof headerOrderId === 'string' ? headerOrderId : undefined,
-  });
+  const authCheck = await authorizeActiveSession(req);
 
   if (!authCheck.authorized || !authCheck.payload) {
-    return res.status(401).json({
-      error: 'Unauthorized Access',
+    if (authCheck.statusCode === 401) {
+      res.setHeader('Set-Cookie', clearSessionCookieHeader(req));
+    }
+    return res.status(authCheck.statusCode).json({
+      error: authCheck.error || 'Unauthorized Access',
+      code: authCheck.code || 'SESSION_ENDED',
       message:
-        authCheck.reason ||
+        authCheck.message ||
         'Only verified customers with an active handbook license can access toolkit progress.',
-    });
-  }
-
-  const recordedOrder = orderFulfillmentStore.getByPaymentId(authCheck.payload.paymentId);
-  if (recordedOrder && (recordedOrder.status === 'revoked' || recordedOrder.status === 'refunded')) {
-    return res.status(403).json({
-      error: 'License Revoked',
-      message: 'Access for this order has been revoked or refunded.',
     });
   }
 

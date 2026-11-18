@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
-import { Shield, ArrowLeft, Mail, Key, CheckCircle2, AlertCircle, BookOpen, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Shield, ArrowLeft, Mail, Key, CheckCircle2, AlertCircle, ArrowRight, Info } from 'lucide-react';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
 import {
+  CustomerLicense,
   createCustomerLicense,
-  getRegisteredLicenses,
+  clearActiveLicense,
+  consumeSessionNotice,
   getActiveLicense,
+  getDeviceInfo,
   isServerSignedLicense,
 } from '../utils/security.ts';
 
@@ -19,17 +22,57 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
 }) => {
   const [email, setEmail] = useState('');
   const [orderOrPaymentId, setOrderOrPaymentId] = useState('');
+  const [sessionNotice, setSessionNotice] = useState<string | null>(() => consumeSessionNotice());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const rawExisting = getActiveLicense();
-  const existingLicense = isServerSignedLicense(rawExisting) ? rawExisting : null;
+  const [existingLicense, setExistingLicense] = useState<CustomerLicense | null>(null);
+
+  // Check if a cached license is still the single active server session
+  useEffect(() => {
+    const rawExisting = getActiveLicense();
+    if (!isServerSignedLicense(rawExisting)) {
+      return;
+    }
+
+    const controller = new AbortController();
+    fetch('/api/session', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${rawExisting.token}`,
+        'X-Order-Id': rawExisting.orderId,
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          setExistingLicense(rawExisting);
+          return;
+        }
+        if (res.status === 401 || res.status === 403) {
+          const data = await res.json().catch(() => ({}));
+          clearActiveLicense();
+          setExistingLicense(null);
+          if (typeof data?.message === 'string' && data.message.trim()) {
+            setSessionNotice((prev) => prev || data.message);
+          }
+        }
+      })
+      .catch(() => {
+        // Ignore abort / transient offline check
+      });
+
+    return () => controller.abort();
+  }, []);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
+    setSessionNotice(null);
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanId = orderOrPaymentId.trim();
@@ -42,44 +85,13 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
 
     const checkAccess = async () => {
       try {
-        // 1. Check existing server-signed licenses in local storage registry
-        const registry = getRegisteredLicenses();
-        const match = registry.find(
-          (l) =>
-            isServerSignedLicense(l) &&
-            l.customerEmail.toLowerCase() === cleanEmail &&
-            (!cleanId ||
-              l.orderId.toLowerCase() === cleanId.toLowerCase() ||
-              l.paymentId.toLowerCase() === cleanId.toLowerCase())
-        );
-
-        if (match) {
-          const checkRes = await fetch('/api/stream-pdf', {
-            method: 'HEAD',
-            headers: {
-              Authorization: `Bearer ${match.token}`,
-              'X-Order-Id': match.orderId,
-              'X-Reader-Session': 'dg-online-reader-v1',
-            },
-          });
-          if (checkRes.ok) {
-            createCustomerLicense(
-              match.customerEmail,
-              match.paymentId,
-              match.customerName,
-              match.token,
-              match.orderId
-            );
-            setSuccessMessage('Verified purchase confirmed! Opening eBook reader...');
-            setTimeout(() => {
-              onLoginSuccess();
-            }, 800);
-            return;
-          }
-        }
-
-        // 2. Verify directly against server API (supports email-only, pay_..., order_..., plink_..., or ORD-...)
-        const payload: Record<string, string> = { email: cleanEmail };
+        // Always authenticate through server /api/verify-payment so a fresh single-device session
+        // is issued and any older active browser/device session is immediately invalidated.
+        const deviceInfo = getDeviceInfo();
+        const payload: Record<string, string> = {
+          email: cleanEmail,
+          deviceLabel: `${deviceInfo.browser} on ${deviceInfo.os}`,
+        };
         if (cleanId) {
           if (cleanId.startsWith('pay_')) {
             payload.paymentId = cleanId;
@@ -93,6 +105,7 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
         const res = await fetch('/api/verify-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify(payload),
         });
 
@@ -130,7 +143,7 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
           return;
         }
 
-        // 3. Surface server verification explanation or reject unverified customer access
+        // Surface server verification explanation or reject unverified customer access
         setErrorMessage(
           typeof data?.message === 'string' && data.message.trim() !== ''
             ? data.message
@@ -185,6 +198,18 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
               Access your protected online handbook reader, saved progress, and custom watermarked content.
             </p>
           </div>
+
+          {/* Session Ended / Another Device Notice */}
+          {sessionNotice && (
+            <div
+              role="status"
+              data-testid="session-ended-notice"
+              className="mb-5 p-3.5 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5 leading-relaxed"
+            >
+              <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>{sessionNotice}</span>
+            </div>
+          )}
 
           {/* Already logged in shortcut */}
           {existingLicense && (

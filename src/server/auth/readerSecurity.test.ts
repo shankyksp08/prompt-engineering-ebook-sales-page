@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import downloadEbookHandler from '../../../api/download-ebook.ts';
 import streamPdfHandler from '../../../api/stream-pdf.ts';
 import { generateLicenseToken } from './licenseVerifier.ts';
+import { activeSessionStore } from './sessionStore.ts';
 import { orderFulfillmentStore } from '../razorpay/orderStore.ts';
 import { generateWatermarkText } from '../../utils/security.ts';
 
@@ -119,61 +123,77 @@ test('stream-pdf blocks direct browser navigation and query-token-only GET reque
 });
 
 test('stream-pdf allows authenticated HEAD check and rejects revoked orders', async () => {
-  const token = generateLicenseToken({
-    orderId: 'ORD-HEAD-1',
-    customerEmail: 'valid@example.com',
-    paymentId: 'pay_head_1',
-  });
+  const tempFile = path.join(os.tmpdir(), `dg-reader-sec-${Date.now()}.json`);
+  activeSessionStore.setStorageFilePathForTests(tempFile);
 
-  const headReq: any = {
-    method: 'HEAD',
-    query: {},
-    headers: {
-      authorization: `Bearer ${token}`,
-      'x-order-id': 'ORD-HEAD-1',
-      'x-reader-session': 'dg-online-reader-v1',
-    },
-  };
-  const headRes = createMockRes();
-  await streamPdfHandler(headReq, headRes);
-  assert.equal(headRes.statusCode, 200);
-  assert.equal(headRes.headers['content-type'], 'application/pdf');
-  assert.equal(headRes.headers['content-disposition'], 'inline');
-  assert.equal(headRes.headers['x-frame-options'], 'DENY');
+  try {
+    const session = await activeSessionStore.issueSingleSession({
+      customerEmail: 'valid@example.com',
+      orderId: 'ORD-HEAD-1',
+      paymentId: 'pay_head_1',
+      deviceLabel: 'Test Browser',
+    });
+    const token = generateLicenseToken({
+      orderId: 'ORD-HEAD-1',
+      customerEmail: 'valid@example.com',
+      paymentId: 'pay_head_1',
+      sessionId: session.activeSessionId!,
+    });
 
-  // Revoke order and ensure stream-pdf blocks access with 403
-  orderFulfillmentStore.set({
-    orderId: 'ORD-HEAD-1',
-    paymentId: 'pay_head_1',
-    customerEmail: 'valid@example.com',
-    customerName: 'Valid User',
-    amountPaise: 9900,
-    amountFormatted: '₹99',
-    currency: 'INR',
-    verifiedAt: Date.now(),
-    licenseToken: token,
-    license: {
+    const headReq: any = {
+      method: 'HEAD',
+      query: {},
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-order-id': 'ORD-HEAD-1',
+        'x-reader-session': 'dg-online-reader-v1',
+      },
+    };
+    const headRes = createMockRes();
+    await streamPdfHandler(headReq, headRes);
+    assert.equal(headRes.statusCode, 200);
+    assert.equal(headRes.headers['content-type'], 'application/pdf');
+    assert.equal(headRes.headers['content-disposition'], 'inline');
+    assert.equal(headRes.headers['x-frame-options'], 'DENY');
+
+    // Revoke order and ensure stream-pdf blocks access with 403
+    orderFulfillmentStore.set({
       orderId: 'ORD-HEAD-1',
       paymentId: 'pay_head_1',
       customerEmail: 'valid@example.com',
       customerName: 'Valid User',
-      amount: '₹99',
+      amountPaise: 9900,
+      amountFormatted: '₹99',
       currency: 'INR',
       verifiedAt: Date.now(),
-      token,
+      licenseToken: token,
+      license: {
+        orderId: 'ORD-HEAD-1',
+        paymentId: 'pay_head_1',
+        customerEmail: 'valid@example.com',
+        customerName: 'Valid User',
+        amount: '₹99',
+        currency: 'INR',
+        verifiedAt: Date.now(),
+        token,
+        sessionId: session.activeSessionId!,
+        status: 'revoked',
+        maxDevices: 1,
+        readerStreamUrl: '/api/reader/stream-pdf',
+      },
       status: 'revoked',
-      maxDevices: 2,
-      readerStreamUrl: '/api/reader/stream-pdf',
-    },
-    status: 'revoked',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
 
-  const revokedRes = createMockRes();
-  await streamPdfHandler(headReq, revokedRes);
-  assert.equal(revokedRes.statusCode, 403);
-  orderFulfillmentStore.clear();
+    const revokedRes = createMockRes();
+    await streamPdfHandler(headReq, revokedRes);
+    assert.equal(revokedRes.statusCode, 403);
+  } finally {
+    orderFulfillmentStore.clear();
+    activeSessionStore.setStorageFilePathForTests(null);
+    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+  }
 });
 
 test('generateWatermarkText includes Digital Govind branding and verified customer email', () => {
@@ -186,7 +206,7 @@ test('generateWatermarkText includes Digital Govind branding and verified custom
     verifiedAt: 1700000000000,
     token: 'abc.def',
     status: 'active',
-    maxDevices: 2,
+    maxDevices: 1,
     activeDevices: [],
   });
 

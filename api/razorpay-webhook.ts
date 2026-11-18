@@ -173,7 +173,7 @@ export default async function handler(req: any, res: any) {
         verifiedAt: Date.now(),
         token,
         status: 'active' as const,
-        maxDevices: 2,
+        maxDevices: 1,
         readerStreamUrl: `/api/reader/stream-pdf`,
       };
 

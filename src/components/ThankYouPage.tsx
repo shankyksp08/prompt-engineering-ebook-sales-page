@@ -17,7 +17,9 @@ import { BookMockup } from './BookMockup.tsx';
 import {
   parseRazorpayPaymentParams,
   createCustomerLicense,
+  clearActiveLicense,
   getActiveLicense,
+  getDeviceInfo,
   isServerSignedLicense,
   CustomerLicense,
 } from '../utils/security.ts';
@@ -60,7 +62,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
     return null;
   });
 
-  // Check for Razorpay payment callback in query params and verify server-side
+  // Check for Razorpay payment callback in query params OR validate cached active session
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const parsed = parseRazorpayPaymentParams(window.location.search);
@@ -78,13 +80,16 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
         return;
       }
 
-      let cancelled = false;
+      const controller = new AbortController();
       setIsVerifying(true);
       setVerificationError(null);
+      const deviceInfo = getDeviceInfo();
 
       fetch('/api/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        signal: controller.signal,
         body: JSON.stringify({
           paymentId: parsed.paymentId,
           paymentLinkId: parsed.paymentLinkId,
@@ -92,11 +97,12 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
           paymentLinkReferenceId: parsed.paymentLinkReferenceId,
           signature: parsed.signature,
           status: parsed.status || 'paid',
+          deviceLabel: `${deviceInfo.browser} on ${deviceInfo.os}`,
         }),
       })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
 
           if (res.ok && data.verified && data.license && data.license.token) {
             const lic = createCustomerLicense(
@@ -115,21 +121,53 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
             );
           }
         })
-        .catch(() => {
-          if (cancelled) return;
+        .catch((err) => {
+          if (controller.signal.aborted || err?.name === 'AbortError') return;
           setVerifiedLicense(null);
           setVerificationError('Unable to reach server to verify payment. Please try again or sign in.');
         })
         .finally(() => {
-          if (!cancelled) {
+          if (!controller.signal.aborted) {
             setIsVerifying(false);
           }
         });
 
       return () => {
-        cancelled = true;
+        controller.abort();
       };
     }
+
+    // Without callback query params, confirm cached license is still the single active session
+    const cached = getActiveLicense();
+    if (!isServerSignedLicense(cached)) return;
+
+    const controller = new AbortController();
+    fetch('/api/session', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${cached.token}`,
+        'X-Order-Id': cached.orderId,
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (controller.signal.aborted) return;
+        if (res.status === 401 || res.status === 403) {
+          const data = await res.json().catch(() => ({}));
+          clearActiveLicense();
+          setVerifiedLicense(null);
+          if (typeof data?.message === 'string' && data.message.trim()) {
+            setVerificationError(data.message);
+          }
+        }
+      })
+      .catch(() => {
+        // Ignore offline errors
+      });
+
+    return () => controller.abort();
   }, []);
 
   const hasVerifiedAccess = isServerSignedLicense(verifiedLicense);
@@ -419,7 +457,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                 <strong>Protected Online Reader:</strong> Your license includes full access to our online eBook reader with customer watermark, screen recording protection, and progress tracking.
               </p>
               <p>
-                <strong>Concurrent Device Limit:</strong> Each purchase license permits up to 2 concurrent devices. You can manage or revoke active browser sessions from the account panel inside the reader.
+                <strong>Single Active Device Policy:</strong> Each purchase license permits one active authenticated session at a time. Signing in from another browser or device automatically ends the previous session.
               </p>
             </div>
           )}

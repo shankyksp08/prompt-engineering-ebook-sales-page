@@ -40,12 +40,16 @@ export interface ReadingProgress {
   lastReadTimestamp: number;
 }
 
+export const SESSION_REPLACED_NOTICE =
+  'Your account was signed in on another device. This session has ended. Please sign in again.';
+
 const STORAGE_KEYS = {
   LICENSE: 'peh_customer_license_v1',
   DEVICE_ID: 'peh_device_fingerprint_v1',
   PROGRESS: 'peh_reading_progress_v1',
   ADMIN_SESSION: 'peh_admin_session_v1',
   STORED_LICENSES: 'peh_registry_licenses_v1',
+  SESSION_NOTICE: 'dg_session_notice_v1',
 };
 
 /**
@@ -183,6 +187,31 @@ export function isServerSignedLicense(license: CustomerLicense | null | undefine
   );
 }
 
+/**
+ * Persist and consume one-time login page notice across redirects (e.g. session ended on another device)
+ */
+export function setSessionNotice(message: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(STORAGE_KEYS.SESSION_NOTICE, message);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function consumeSessionNotice(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const val = sessionStorage.getItem(STORAGE_KEYS.SESSION_NOTICE);
+    if (val) {
+      sessionStorage.removeItem(STORAGE_KEYS.SESSION_NOTICE);
+      return val;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Get all stored customer licenses (local registry)
@@ -209,7 +238,7 @@ export function saveRegisteredLicense(license: CustomerLicense): void {
 }
 
 /**
- * Create verified customer license and save session
+ * Create verified customer license and save session (strictly 1 active device)
  */
 export function createCustomerLicense(
   email: string,
@@ -234,7 +263,7 @@ export function createCustomerLicense(
     verifiedAt,
     token,
     status: 'active',
-    maxDevices: 2,
+    maxDevices: 1,
     activeDevices: [
       {
         deviceId: currentDevice,
@@ -248,7 +277,7 @@ export function createCustomerLicense(
 
   if (typeof window !== 'undefined') {
     localStorage.setItem(STORAGE_KEYS.LICENSE, JSON.stringify(license));
-    saveRegisteredLicense(license);
+    localStorage.setItem(STORAGE_KEYS.STORED_LICENSES, JSON.stringify([license]));
   }
 
   return license;
@@ -265,25 +294,16 @@ export function getActiveLicense(): CustomerLicense | null {
     const license: CustomerLicense = JSON.parse(raw);
     if (!license || license.status !== 'active') return null;
 
-    // Check device binding
+    // Normalize single-device metadata for current browser session
     const currentDevice = getOrCreateDeviceId();
-    const hasDevice = license.activeDevices.some((d) => d.deviceId === currentDevice);
+    const hasDevice = license.activeDevices?.some((d) => d.deviceId === currentDevice);
     if (!hasDevice) {
-      if (license.activeDevices.length >= license.maxDevices) {
-        // Exceeded device limit
-        return null;
-      }
-      // Register this new device within allowance
-      const info = getDeviceInfo();
-      license.activeDevices.push({
-        deviceId: currentDevice,
-        browser: info.browser,
-        os: info.os,
-        lastActive: Date.now(),
-        isCurrent: true,
-      });
+      return null;
+    }
+    if (license.maxDevices !== 1 || license.activeDevices.length > 1) {
+      license.maxDevices = 1;
+      license.activeDevices = license.activeDevices.filter((d) => d.deviceId === currentDevice);
       localStorage.setItem(STORAGE_KEYS.LICENSE, JSON.stringify(license));
-      saveRegisteredLicense(license);
     }
     return license;
   } catch {
@@ -292,11 +312,36 @@ export function getActiveLicense(): CustomerLicense | null {
 }
 
 /**
- * Customer logout
+ * Customer local logout cleanup
  */
 export function clearActiveLicense(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(STORAGE_KEYS.LICENSE);
+  localStorage.removeItem(STORAGE_KEYS.STORED_LICENSES);
+}
+
+/**
+ * Invalidate session on the server, clear the HttpOnly cookie, and clear local session state
+ */
+export async function performServerLogout(license?: CustomerLicense | null): Promise<void> {
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (license?.token) {
+      headers.Authorization = `Bearer ${license.token}`;
+    }
+    await fetch('/api/session', {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      body: JSON.stringify({ action: 'logout' }),
+    });
+  } catch {
+    // Best-effort network cleanup; local state still clears below
+  } finally {
+    clearActiveLicense();
+  }
 }
 
 /**

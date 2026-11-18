@@ -9,6 +9,7 @@ import testNotificationsHandler from './api/test-notifications.ts';
 import downloadEbookHandler from './api/download-ebook.ts';
 import streamPdfHandler from './api/stream-pdf.ts';
 import toolkitProgressHandler from './api/toolkit-progress.ts';
+import sessionHandler from './api/session.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,6 +107,17 @@ async function startServer() {
       await toolkitProgressHandler(req, res);
     } catch (err: any) {
       console.error('[Server] Toolkit progress route error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.all('/api/session', async (req, res) => {
+    try {
+      await sessionHandler(req, res);
+    } catch (err: any) {
+      console.error('[Server] Session route error:', err);
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });
       }

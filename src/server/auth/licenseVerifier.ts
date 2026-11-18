@@ -10,6 +10,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  activeSessionStore,
+  SESSION_ENDED_MESSAGE,
+  SESSION_REPLACED_MESSAGE,
+  type CustomerSessionRecord,
+} from './sessionStore.ts';
+import { orderFulfillmentStore } from '../razorpay/orderStore.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +30,9 @@ export const PRIVATE_STORAGE_DIR = fs.existsSync(cwdPrivateStorage)
 export const OFFICIAL_EBOOK_PATH = path.join(PRIVATE_STORAGE_DIR, 'Digital-Govind-Watermarked-eBook.pdf');
 export const BACKUP_EBOOK_PATH = path.join(PRIVATE_STORAGE_DIR, 'backup', 'Prompt_Engineering_Handbook_original_backup.pdf');
 
+export const READER_SESSION_COOKIE_NAME = 'dg_reader_session';
+export const DEFAULT_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
 /**
  * Payload structure for cryptographically signed customer license tokens
  */
@@ -30,6 +40,7 @@ export interface LicenseTokenPayload {
   orderId: string;
   customerEmail: string;
   paymentId: string;
+  sid?: string; // Server-enforced single active device session ID
   iat: number; // Issued-at timestamp (milliseconds)
   exp: number; // Expiration timestamp (milliseconds)
 }
@@ -54,7 +65,7 @@ export function getLicenseSigningSecret(): string {
 
 /**
  * Generates a cryptographically secure HMAC-SHA256 signed license token.
- * 
+ *
  * Format:
  *   <base64url(payload)>.<base64url(hmac_sha256(payload, LICENSE_SIGNING_SECRET))>
  */
@@ -62,6 +73,7 @@ export function generateLicenseToken(params: {
   orderId: string;
   customerEmail: string;
   paymentId: string;
+  sessionId?: string;
   expiresInDays?: number;
   expiresAtMs?: number;
 }): string {
@@ -81,10 +93,15 @@ export function generateLicenseToken(params: {
     exp = iat + 365 * 24 * 60 * 60 * 1000;
   }
 
+  const cleanSid = typeof params.sessionId === 'string' && params.sessionId.trim()
+    ? params.sessionId.trim()
+    : undefined;
+
   const payload: LicenseTokenPayload = {
     orderId: params.orderId.trim(),
     customerEmail: params.customerEmail.trim().toLowerCase(),
     paymentId: params.paymentId.trim(),
+    ...(cleanSid ? { sid: cleanSid } : {}),
     iat,
     exp,
   };
@@ -253,6 +270,258 @@ export function authorizeEbookAccess(queryOrHeaders: {
   }
 
   return { authorized: true, payload };
+}
+
+/**
+ * Parse raw Cookie header string into a key-value map.
+ */
+export function parseCookieHeader(cookieHeader: string | undefined | null): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!cookieHeader || typeof cookieHeader !== 'string') return cookies;
+
+  const pairs = cookieHeader.split(';');
+  for (const pair of pairs) {
+    const idx = pair.indexOf('=');
+    if (idx <= 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const rawVal = pair.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      cookies[key] = decodeURIComponent(rawVal);
+    } catch {
+      cookies[key] = rawVal;
+    }
+  }
+  return cookies;
+}
+
+/**
+ * Extract the HttpOnly reader session cookie token from a request.
+ */
+export function getSessionCookieToken(req: any): string | undefined {
+  if (req?.cookies && typeof req.cookies[READER_SESSION_COOKIE_NAME] === 'string') {
+    const val = req.cookies[READER_SESSION_COOKIE_NAME].trim();
+    return val || undefined;
+  }
+  const cookieHeader = req?.headers?.cookie || req?.headers?.Cookie;
+  const parsed = parseCookieHeader(Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader);
+  const val = parsed[READER_SESSION_COOKIE_NAME];
+  return val && val.trim() ? val.trim() : undefined;
+}
+
+/**
+ * Determine whether the request arrived over HTTPS (so Secure cookie attribute matches deployment).
+ */
+export function isSecureRequest(req: any): boolean {
+  const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '').toLowerCase();
+  if (forwardedProto.split(',')[0].trim() === 'https') return true;
+  if (req?.socket?.encrypted || req?.connection?.encrypted) return true;
+  return process.env.NODE_ENV === 'production';
+}
+
+/**
+ * Build Set-Cookie header for HttpOnly, SameSite=Lax (+ Secure over HTTPS) reader session token.
+ */
+export function buildSessionCookieHeader(
+  token: string,
+  req: any,
+  maxAgeSec = DEFAULT_SESSION_MAX_AGE_SECONDS
+): string {
+  const parts = [
+    `${READER_SESSION_COOKIE_NAME}=${encodeURIComponent(token.trim())}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.max(0, Math.floor(maxAgeSec))}`,
+  ];
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+  return parts.join('; ');
+}
+
+/**
+ * Build Set-Cookie header that clears the reader session cookie cleanly.
+ */
+export function clearSessionCookieHeader(req: any): string {
+  const parts = [
+    `${READER_SESSION_COOKIE_NAME}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+  return parts.join('; ');
+}
+
+/**
+ * Derive a clean human-readable browser/OS label from User-Agent when client doesn't supply one.
+ */
+export function deriveDeviceLabelFromUserAgent(uaRaw: unknown): string {
+  const ua = typeof uaRaw === 'string' ? uaRaw : '';
+  if (!ua) return 'Web Browser';
+
+  let browser = 'Browser';
+  if (ua.includes('Firefox') || ua.includes('FxiOS')) browser = 'Firefox';
+  else if (ua.includes('Edg') || ua.includes('EdgiOS') || ua.includes('EdgA')) browser = 'Edge';
+  else if (ua.includes('CriOS') || ua.includes('Chrome')) browser = 'Chrome';
+  else if (ua.includes('Safari')) browser = 'Safari';
+
+  let os = 'Desktop';
+  if (/iPad/i.test(ua)) os = 'iPadOS';
+  else if (/iPhone|iPod/i.test(ua)) os = 'iOS';
+  else if (/Android/i.test(ua)) os = 'Android';
+  else if (/Macintosh|Mac OS/i.test(ua)) os = 'macOS';
+  else if (/Windows/i.test(ua)) os = 'Windows';
+  else if (/Linux/i.test(ua)) os = 'Linux';
+
+  return `${browser} on ${os}`;
+}
+
+export interface ActiveSessionAuthResult {
+  authorized: boolean;
+  statusCode: number;
+  error?: string;
+  code?: 'SESSION_REPLACED' | 'SESSION_ENDED' | 'SESSION_REQUIRED' | 'ORDER_REVOKED' | 'INVALID_TOKEN';
+  message?: string;
+  payload?: LicenseTokenPayload;
+  session?: CustomerSessionRecord;
+}
+
+/**
+ * Single source of truth for validating an authenticated customer's active device session.
+ *
+ * Enforces:
+ * 1. Valid HMAC-SHA256 license token from Authorization Bearer header, HttpOnly cookie, or optional query param.
+ * 2. When BOTH Bearer/query token and HttpOnly cookie exist on the request, they must belong to the same customer & sid
+ *    (blocks session-mixing or stale-tab replay).
+ * 3. Token MUST carry a server-issued `sid` claim.
+ * 4. `sid` must match the single authoritative active session ID in `activeSessionStore`.
+ * 5. Order must not be revoked or refunded.
+ */
+export async function authorizeActiveSession(
+  req: any,
+  options: { allowQueryToken?: boolean; touch?: boolean } = {}
+): Promise<ActiveSessionAuthResult> {
+  const query = req?.query || {};
+  const headers = req?.headers || {};
+
+  const authHeader = headers['authorization'] || headers['Authorization'];
+  const bearerToken =
+    typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : undefined;
+
+  const queryToken =
+    options.allowQueryToken && typeof query.token === 'string' && query.token.trim()
+      ? query.token.trim()
+      : undefined;
+
+  const cookieToken = getSessionCookieToken(req);
+  const primaryToken = bearerToken || queryToken || cookieToken;
+
+  if (!primaryToken) {
+    return {
+      authorized: false,
+      statusCode: 401,
+      error: 'Unauthorized Access',
+      code: 'SESSION_REQUIRED',
+      message: 'Please sign in to access your handbook reader.',
+    };
+  }
+
+  const headerOrderId = headers['x-order-id'] || headers['X-Order-Id'];
+  const orderIdHint =
+    typeof headerOrderId === 'string'
+      ? headerOrderId
+      : typeof query.orderId === 'string'
+        ? query.orderId
+        : undefined;
+  const paymentIdHint = typeof query.paymentId === 'string' ? query.paymentId : undefined;
+
+  const authCheck = authorizeEbookAccess({
+    token: primaryToken,
+    orderId: orderIdHint,
+    paymentId: paymentIdHint,
+  });
+
+  if (!authCheck.authorized || !authCheck.payload) {
+    return {
+      authorized: false,
+      statusCode: 401,
+      error: 'Unauthorized Access',
+      code: 'INVALID_TOKEN',
+      message: authCheck.reason || SESSION_ENDED_MESSAGE,
+    };
+  }
+
+  const payload = authCheck.payload;
+  if (!payload.sid || typeof payload.sid !== 'string' || !payload.sid.trim()) {
+    return {
+      authorized: false,
+      statusCode: 401,
+      error: 'Session Required',
+      code: 'SESSION_REQUIRED',
+      message: SESSION_ENDED_MESSAGE,
+    };
+  }
+
+  // If BOTH explicit token (Bearer/query) and HttpOnly cookie exist, enforce exact sid & email agreement
+  if ((bearerToken || queryToken) && cookieToken && cookieToken !== primaryToken) {
+    const cookieVerify = verifyLicenseToken(cookieToken);
+    if (
+      !cookieVerify.valid ||
+      !cookieVerify.payload ||
+      cookieVerify.payload.customerEmail !== payload.customerEmail ||
+      cookieVerify.payload.sid !== payload.sid
+    ) {
+      return {
+        authorized: false,
+        statusCode: 401,
+        error: 'Session Invalidated',
+        code: 'SESSION_REPLACED',
+        message: SESSION_REPLACED_MESSAGE,
+      };
+    }
+  }
+
+  // Enforce order revocation / refund check
+  const recordedOrder = orderFulfillmentStore.getByPaymentId(payload.paymentId);
+  if (recordedOrder && (recordedOrder.status === 'revoked' || recordedOrder.status === 'refunded')) {
+    return {
+      authorized: false,
+      statusCode: 403,
+      error: 'License Revoked',
+      code: 'ORDER_REVOKED',
+      message: 'Access for this order has been revoked or refunded.',
+    };
+  }
+
+  // Validate single active session against persistent server-side store
+  const sessionCheck = await activeSessionStore.validateSession(payload.customerEmail, payload.sid);
+  if (!sessionCheck.valid) {
+    return {
+      authorized: false,
+      statusCode: 401,
+      error: sessionCheck.code === 'SESSION_REPLACED' ? 'Session Replaced' : 'Session Ended',
+      code: sessionCheck.code,
+      message: sessionCheck.message,
+    };
+  }
+
+  if (options.touch !== false) {
+    await activeSessionStore.touchSession(payload.customerEmail, payload.sid);
+  }
+
+  return {
+    authorized: true,
+    statusCode: 200,
+    payload,
+    session: sessionCheck.session,
+  };
 }
 
 /**

@@ -15,7 +15,12 @@
  *   8. Automatically triggers customer thank-you email and SMS upon successful fulfillment.
  */
 
-import { generateLicenseToken } from '../src/server/auth/licenseVerifier.ts';
+import {
+  generateLicenseToken,
+  buildSessionCookieHeader,
+  deriveDeviceLabelFromUserAgent,
+} from '../src/server/auth/licenseVerifier.ts';
+import { activeSessionStore } from '../src/server/auth/sessionStore.ts';
 import {
   verifyRazorpayPaymentServerSide,
   findVerifiedPaymentByEmailServerSide,
@@ -32,6 +37,87 @@ import {
   dispatchPurchaseNotifications,
   notificationStore,
 } from '../src/server/notifications/notificationService.ts';
+
+async function issueSingleDeviceLicense(params: {
+  req: any;
+  res: any;
+  orderId: string;
+  paymentId: string;
+  paymentLinkId?: string;
+  customerEmail: string;
+  customerName: string;
+  customerPhone?: string;
+  amountPaise?: number;
+  currency?: string;
+  verifiedAt?: number;
+  deviceLabel?: string;
+  existingOrder?: OrderRecord;
+}): Promise<{ license: CustomerLicensePayload; orderRecord: OrderRecord }> {
+  const resolvedLabel =
+    typeof params.deviceLabel === 'string' && params.deviceLabel.trim()
+      ? params.deviceLabel.trim().slice(0, 80)
+      : deriveDeviceLabelFromUserAgent(params.req?.headers?.['user-agent']);
+
+  const session = await activeSessionStore.issueSingleSession({
+    customerEmail: params.customerEmail,
+    orderId: params.orderId,
+    paymentId: params.paymentId,
+    deviceLabel: resolvedLabel,
+  });
+
+  const token = generateLicenseToken({
+    orderId: params.orderId,
+    customerEmail: params.customerEmail,
+    paymentId: params.paymentId,
+    sessionId: session.activeSessionId!,
+    expiresInDays: 365,
+  });
+
+  const verifiedAt = params.verifiedAt || params.existingOrder?.verifiedAt || Date.now();
+  const currency = params.currency || params.existingOrder?.currency || 'INR';
+
+  const license: CustomerLicensePayload = {
+    orderId: params.orderId,
+    paymentId: params.paymentId,
+    customerEmail: params.customerEmail.trim().toLowerCase(),
+    customerName: params.customerName || 'Valued Reader',
+    customerPhone: params.customerPhone || undefined,
+    amount: '₹99',
+    currency,
+    verifiedAt,
+    token,
+    sessionId: session.activeSessionId!,
+    deviceLabel: session.deviceLabel,
+    status: 'active',
+    maxDevices: 1,
+    readerStreamUrl: `/api/reader/stream-pdf`,
+  };
+
+  const nowIso = new Date().toISOString();
+  const orderRecord: OrderRecord = {
+    orderId: params.orderId,
+    paymentId: params.paymentId,
+    paymentLinkId: params.paymentLinkId || params.existingOrder?.paymentLinkId,
+    customerEmail: license.customerEmail,
+    customerName: license.customerName,
+    customerPhone: license.customerPhone,
+    amountPaise: params.amountPaise || params.existingOrder?.amountPaise || 9900,
+    amountFormatted: '₹99',
+    currency,
+    verifiedAt,
+    licenseToken: token,
+    license,
+    status: 'fulfilled',
+    createdAt: params.existingOrder?.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+
+  orderFulfillmentStore.set(orderRecord);
+  params.res.setHeader('Cache-Control', 'no-store');
+  params.res.setHeader('Set-Cookie', buildSessionCookieHeader(token, params.req));
+
+  return { license, orderRecord };
+}
 
 export default async function handler(req: any, res: any) {
   // ---------------------------------------------------------------------------
@@ -85,6 +171,7 @@ export default async function handler(req: any, res: any) {
       }
 
       const notifRecord = notificationStore.get(order.orderId, order.paymentId);
+      const { token: _omittedToken, sessionId: _omittedSid, ...safeLicenseMeta } = order.license;
       return res.status(200).json({
         verified: true,
         orderId: order.orderId,
@@ -96,7 +183,7 @@ export default async function handler(req: any, res: any) {
         currency: order.currency,
         status: order.status,
         verifiedAt: order.verifiedAt,
-        license: order.license,
+        license: safeLicenseMeta,
         notifications: notifRecord
           ? {
               emailSent: notifRecord.result.email.sent,
@@ -161,7 +248,7 @@ export default async function handler(req: any, res: any) {
             verifiedAt,
             token,
             status: 'active',
-            maxDevices: 2,
+            maxDevices: 1,
             readerStreamUrl: `/api/reader/stream-pdf`,
           };
           orderFulfillmentStore.set({
@@ -182,6 +269,7 @@ export default async function handler(req: any, res: any) {
             updatedAt: new Date().toISOString(),
           });
 
+          const { token: _omittedToken, ...safeLicenseMeta } = license;
           return res.status(200).json({
             verified: true,
             orderId: resolvedOrderId,
@@ -193,7 +281,7 @@ export default async function handler(req: any, res: any) {
             currency: liveResult.payment.currency || 'INR',
             status: 'fulfilled',
             verifiedAt,
-            license,
+            license: safeLicenseMeta,
             notifications: null,
           });
         }
@@ -223,6 +311,7 @@ export default async function handler(req: any, res: any) {
         signature,
         email,
         customerName,
+        deviceLabel,
       } = body;
 
       const cleanPaymentId = typeof paymentId === 'string' ? paymentId.trim() : '';
@@ -272,10 +361,26 @@ export default async function handler(req: any, res: any) {
           });
         }
 
+        const { license } = await issueSingleDeviceLicense({
+          req,
+          res,
+          orderId: existingOrder.orderId,
+          paymentId: existingOrder.paymentId,
+          paymentLinkId: existingOrder.paymentLinkId,
+          customerEmail: existingOrder.customerEmail,
+          customerName: existingOrder.customerName,
+          customerPhone: existingOrder.customerPhone,
+          amountPaise: existingOrder.amountPaise,
+          currency: existingOrder.currency,
+          verifiedAt: existingOrder.verifiedAt,
+          deviceLabel,
+          existingOrder,
+        });
+
         return res.status(200).json({
           verified: true,
-          message: 'Payment already verified. Existing customer license retrieved.',
-          license: existingOrder.license,
+          message: 'Payment verified. Active single-device session issued.',
+          license,
           isExisting: true,
         });
       }
@@ -361,10 +466,38 @@ export default async function handler(req: any, res: any) {
             message: 'Access has been revoked or refunded for this transaction.',
           });
         }
+        if (
+          cleanEmail &&
+          isRealCustomerEmail(existingByResolvedPayment.customerEmail) &&
+          existingByResolvedPayment.customerEmail.toLowerCase() !== cleanEmail
+        ) {
+          return res.status(403).json({
+            verified: false,
+            error: 'Email Mismatch',
+            message: 'The email address entered does not match the customer email recorded on this Razorpay payment.',
+          });
+        }
+
+        const { license } = await issueSingleDeviceLicense({
+          req,
+          res,
+          orderId: existingByResolvedPayment.orderId,
+          paymentId: existingByResolvedPayment.paymentId,
+          paymentLinkId: existingByResolvedPayment.paymentLinkId,
+          customerEmail: existingByResolvedPayment.customerEmail,
+          customerName: existingByResolvedPayment.customerName,
+          customerPhone: existingByResolvedPayment.customerPhone,
+          amountPaise: existingByResolvedPayment.amountPaise,
+          currency: existingByResolvedPayment.currency,
+          verifiedAt: existingByResolvedPayment.verifiedAt,
+          deviceLabel,
+          existingOrder: existingByResolvedPayment,
+        });
+
         return res.status(200).json({
           verified: true,
-          message: 'Payment already verified. Existing customer license retrieved.',
-          license: existingByResolvedPayment.license,
+          message: 'Payment verified. Active single-device session issued.',
+          license,
           isExisting: true,
         });
       }
@@ -375,31 +508,10 @@ export default async function handler(req: any, res: any) {
       const orderId = verificationResult.orderId!;
       const verifiedAt = Date.now();
 
-      // 4. Generate cryptographically secure HMAC-SHA256 signed license token
-      const token = generateLicenseToken({
-        orderId,
-        customerEmail: verifiedEmail,
-        paymentId: payment.id,
-        expiresInDays: 365,
-      });
-
-      const license: CustomerLicensePayload = {
-        orderId,
-        paymentId: payment.id,
-        customerEmail: verifiedEmail,
-        customerName: verifiedName,
-        customerPhone: verifiedPhone || undefined,
-        amount: '₹99',
-        currency: payment.currency || 'INR',
-        verifiedAt,
-        token,
-        status: 'active',
-        maxDevices: 2,
-        readerStreamUrl: `/api/reader/stream-pdf`,
-      };
-
-      // 5. Store fulfilled order in server-authoritative store (Idempotency guarantee)
-      const orderRecord: OrderRecord = {
+      // 4. Issue exclusive single-device session, HMAC-SHA256 license token & HttpOnly cookie
+      const { license } = await issueSingleDeviceLicense({
+        req,
+        res,
         orderId,
         paymentId: payment.id,
         paymentLinkId: verificationResult.paymentLink?.id || (paymentLinkId ? String(paymentLinkId) : undefined),
@@ -407,19 +519,12 @@ export default async function handler(req: any, res: any) {
         customerName: verifiedName,
         customerPhone: verifiedPhone || undefined,
         amountPaise: payment.amount,
-        amountFormatted: '₹99',
         currency: payment.currency || 'INR',
         verifiedAt,
-        licenseToken: token,
-        license,
-        status: 'fulfilled',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+        deviceLabel,
+      });
 
-      orderFulfillmentStore.set(orderRecord);
-
-      // 6. Automatically dispatch customer thank-you email and SMS (if not already sent)
+      // 5. Automatically dispatch customer thank-you email and SMS (if not already sent)
       dispatchPurchaseNotifications({
         orderId,
         paymentId: payment.id,
@@ -433,7 +538,7 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({
         verified: true,
-        message: 'Payment verified successfully. Customer license created.',
+        message: 'Payment verified successfully. Single-device customer license created.',
         license,
       });
     } catch (err: any) {

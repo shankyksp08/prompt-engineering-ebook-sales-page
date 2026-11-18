@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -42,6 +42,7 @@ import {
 } from '../utils/toolkitProgress.ts';
 import {
   CustomerLicense,
+  SESSION_REPLACED_NOTICE,
   getActiveLicense,
   clearActiveLicense,
   isServerSignedLicense,
@@ -50,7 +51,8 @@ import {
   toggleTopicBookmark,
   saveReadingProgress,
   generateWatermarkText,
-  revokeDeviceSession,
+  performServerLogout,
+  setSessionNotice,
 } from '../utils/security.ts';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -103,7 +105,27 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const nativeFullscreenRef = useRef<boolean>(false);
 
-  // Verify active license cryptographically with the server before unlocking reader UI
+  const onNavigateLoginRef = useRef(onNavigateLogin);
+  onNavigateLoginRef.current = onNavigateLogin;
+  const invalidatedTriggeredRef = useRef<boolean>(false);
+
+  const handleSessionInvalidated = useCallback((message?: string) => {
+    if (invalidatedTriggeredRef.current) return;
+    invalidatedTriggeredRef.current = true;
+    setSessionNotice(
+      typeof message === 'string' && message.trim() ? message.trim() : SESSION_REPLACED_NOTICE
+    );
+    clearActiveLicense();
+    setLicense(null);
+    setServerVerified(false);
+    setPdfDoc(null);
+    setSessionModalOpen(false);
+    if (onNavigateLoginRef.current) {
+      onNavigateLoginRef.current();
+    }
+  }, []);
+
+  // Verify active license & single active device session with the server before unlocking reader UI
   useEffect(() => {
     const active = getActiveLicense();
     if (!isServerSignedLicense(active)) {
@@ -117,42 +139,107 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     }
 
     setLicense(active);
-    let cancelled = false;
+    const controller = new AbortController();
     setIsVerifyingLicense(true);
 
-    fetch('/api/stream-pdf', {
-      method: 'HEAD',
+    fetch('/api/session', {
+      method: 'GET',
       headers: {
         Authorization: `Bearer ${active.token}`,
         'X-Order-Id': active.orderId,
-        'X-Reader-Session': 'dg-online-reader-v1',
       },
+      credentials: 'same-origin',
       cache: 'no-store',
+      signal: controller.signal,
     })
-      .then((res) => {
-        if (cancelled) return;
+      .then(async (res) => {
+        if (controller.signal.aborted) return;
         if (res.ok) {
+          invalidatedTriggeredRef.current = false;
           setServerVerified(true);
-        } else {
-          clearActiveLicense();
-          setLicense(null);
-          setServerVerified(false);
+          return;
         }
+        if (res.status === 401 || res.status === 403) {
+          const data = await res.json().catch(() => ({}));
+          handleSessionInvalidated(data?.message);
+          return;
+        }
+        setServerVerified(false);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setServerVerified(false);
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!controller.signal.aborted) {
           setIsVerifyingLicense(false);
         }
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, []);
+  }, [handleSessionInvalidated]);
+
+  // Continuous single-device session heartbeat (periodic + window focus / tab visibility)
+  useEffect(() => {
+    if (!license || !serverVerified) return;
+
+    let lastCheckedAt = Date.now();
+    let inFlight = false;
+
+    const checkSessionStatus = async (force = false) => {
+      const now = Date.now();
+      if (inFlight) return;
+      if (!force && now - lastCheckedAt < 1500) return;
+
+      inFlight = true;
+      lastCheckedAt = now;
+      try {
+        const res = await fetch('/api/session', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${license.token}`,
+            'X-Order-Id': license.orderId,
+          },
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          const data = await res.json().catch(() => ({}));
+          handleSessionInvalidated(data?.message);
+        }
+      } catch {
+        // Ignore transient offline / network errors so active readers are not disrupted
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void checkSessionStatus(true);
+    }, 10000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void checkSessionStatus(false);
+      }
+    };
+
+    const handleFocus = () => {
+      void checkSessionStatus(false);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [license, serverVerified, handleSessionInvalidated]);
 
   // Watermark text generator (includes Digital Govind branding + verified customer email)
   const watermark = useMemo(() => {
@@ -181,9 +268,17 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         'X-Order-Id': license.orderId,
         'X-Reader-Session': 'dg-online-reader-v1',
       },
+      credentials: 'same-origin',
       cache: 'no-store',
     })
       .then(async (res) => {
+        if (res.status === 401 || res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (!cancelled) {
+            handleSessionInvalidated(errJson?.message);
+          }
+          throw new Error(errJson?.message || 'Session ended.');
+        }
         if (!res.ok) {
           const errJson = await res.json().catch(() => ({}));
           throw new Error(errJson.message || `Reader authentication error (HTTP ${res.status}).`);
@@ -206,7 +301,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         setPdfDoc(loadedDoc);
       })
       .catch((err: any) => {
-        if (cancelled) return;
+        if (cancelled || invalidatedTriggeredRef.current) return;
         setPdfError(err?.message || 'Unable to load protected handbook pages. Please sign in again.');
       })
       .finally(() => {
@@ -221,7 +316,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         loadingTask.destroy().catch(() => {});
       }
     };
-  }, [license, serverVerified]);
+  }, [license, serverVerified, handleSessionInvalidated]);
 
   // Restore verified customer's Complete Starter Toolkit progress from backend API
   useEffect(() => {
@@ -248,9 +343,17 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         Authorization: `Bearer ${license.token}`,
         'X-Order-Id': license.orderId,
       },
+      credentials: 'same-origin',
       cache: 'no-store',
     })
       .then(async (res) => {
+        if (res.status === 401 || res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (!cancelled) {
+            handleSessionInvalidated(errJson?.message);
+          }
+          throw new Error('SESSION_INVALIDATED');
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
@@ -273,6 +376,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
               Authorization: `Bearer ${license.token}`,
               'X-Order-Id': license.orderId,
             },
+            credentials: 'same-origin',
             body: JSON.stringify({ progress: authoritative }),
           }).catch(() => {});
         }
@@ -287,7 +391,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     return () => {
       cancelled = true;
     };
-  }, [license, serverVerified]);
+  }, [license, serverVerified, handleSessionInvalidated]);
 
   // Track PDF viewport container width for crisp responsive canvas sizing across phones, tablets & desktops
   useEffect(() => {
@@ -521,8 +625,14 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
           Authorization: `Bearer ${license.token}`,
           'X-Order-Id': license.orderId,
         },
+        credentials: 'same-origin',
         body: JSON.stringify({ progress: nextState }),
       });
+      if (res.status === 401 || res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        handleSessionInvalidated(errJson?.message);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json().catch(() => ({}));
       if (data?.progress) {
@@ -1262,11 +1372,11 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 </div>
               </div>
 
-              {/* Active Devices */}
+              {/* Active Device Session */}
               <div>
                 <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 flex items-center justify-between">
-                  <span>Registered Devices ({license.activeDevices.length}/{license.maxDevices})</span>
-                  <span className="text-slate-500">Max 2 Concurrent</span>
+                  <span>Active Device Session ({license.activeDevices.length}/1)</span>
+                  <span className="text-slate-500">1 Active Device Policy</span>
                 </div>
 
                 <div className="space-y-2">
@@ -1292,18 +1402,19 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                       </div>
 
                       <button
-                        onClick={() => {
-                          const updated = revokeDeviceSession(dev.deviceId);
-                          if (!updated) {
-                            setSessionModalOpen(false);
-                            setLicense(null);
-                          } else {
-                            setLicense(updated);
+                        onClick={async () => {
+                          await performServerLogout(license);
+                          setSessionModalOpen(false);
+                          setLicense(null);
+                          setServerVerified(false);
+                          setPdfDoc(null);
+                          if (onNavigateLoginRef.current) {
+                            onNavigateLoginRef.current();
                           }
                         }}
                         className="text-[11px] text-rose-400 hover:text-rose-300 font-medium p-1 cursor-pointer"
                       >
-                        Revoke
+                        End Session
                       </button>
                     </div>
                   ))}
@@ -1313,10 +1424,15 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
               {/* Sign out */}
               <div className="pt-2 border-t border-slate-800 flex justify-between items-center">
                 <button
-                  onClick={() => {
-                    clearActiveLicense();
+                  onClick={async () => {
+                    await performServerLogout(license);
                     setLicense(null);
+                    setServerVerified(false);
+                    setPdfDoc(null);
                     setSessionModalOpen(false);
+                    if (onNavigateLoginRef.current) {
+                      onNavigateLoginRef.current();
+                    }
                   }}
                   className="flex items-center gap-2 text-rose-400 hover:text-rose-300 text-xs font-medium cursor-pointer"
                 >

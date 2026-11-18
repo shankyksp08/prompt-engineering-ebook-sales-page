@@ -19,6 +19,8 @@ export interface CustomerLicensePayload {
   currency: string;
   verifiedAt: number;
   token: string;
+  sessionId?: string;
+  deviceLabel?: string;
   status: 'active' | 'revoked';
   maxDevices: number;
   downloadUrl?: string;

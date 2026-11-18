@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { FUNNEL_CONFIG, isPaymentConfigured } from './config/funnelConfig.ts';
+import { resolveAppRoute } from './utils/funnel.ts';
 import { Navigation } from './components/Navigation.tsx';
 import { Hero } from './components/Hero.tsx';
 import { ProblemSection } from './components/ProblemSection.tsx';
@@ -79,8 +80,10 @@ export default function App() {
     }
   };
 
+  const activeRoute = resolveAppRoute(currentPath);
+
   // Route: /reader (Protected Online eBook Reader)
-  if (currentPath === '/reader' || currentPath.endsWith('/reader')) {
+  if (activeRoute === '/reader') {
     return (
       <ReaderPage
         onNavigateHome={() => navigate('/')}
@@ -90,7 +93,7 @@ export default function App() {
   }
 
   // Route: /login (Customer Access Portal)
-  if (currentPath === '/login' || currentPath.endsWith('/login')) {
+  if (activeRoute === '/login') {
     return (
       <CustomerLoginPage
         onNavigateHome={() => navigate('/')}
@@ -100,7 +103,7 @@ export default function App() {
   }
 
   // Route: /thank-you (Customer Fulfillment Portal)
-  if (currentPath === '/thank-you' || currentPath.endsWith('/thank-you')) {
+  if (activeRoute === '/thank-you') {
     return (
       <ThankYouPage
         onNavigateHome={() => navigate('/')}
@@ -111,7 +114,7 @@ export default function App() {
   }
 
   // Route: /admin (Private Development & Admin Console)
-  if (currentPath === '/admin' || currentPath.endsWith('/admin')) {
+  if (activeRoute === '/admin') {
     return (
       <AdminPortal
         onNavigateHome={() => navigate('/')}

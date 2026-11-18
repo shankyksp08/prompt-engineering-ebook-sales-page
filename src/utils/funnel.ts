@@ -122,3 +122,18 @@ export function formatByteSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+export type AppRoute = '/' | '/thank-you' | '/reader' | '/login' | '/admin';
+
+/**
+ * Resolves a browser pathname (with or without trailing slash) to an application route.
+ */
+export function resolveAppRoute(pathname?: string | null): AppRoute {
+  const clean = (pathname || '/').split('?')[0].replace(/\/+$/, '') || '/';
+  if (clean === '/thank-you' || clean.endsWith('/thank-you')) return '/thank-you';
+  if (clean === '/reader' || clean.endsWith('/reader')) return '/reader';
+  if (clean === '/login' || clean.endsWith('/login')) return '/login';
+  if (clean === '/admin' || clean.endsWith('/admin')) return '/admin';
+  return '/';
+}
+

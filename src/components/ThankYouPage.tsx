@@ -13,6 +13,8 @@ import {
   ExternalLink,
   Sparkles,
   ArrowRight,
+  Lock,
+  Loader2,
 } from 'lucide-react';
 import { FUNNEL_CONFIG, isDownloadConfigured } from '../config/funnelConfig.ts';
 import { READING_PATHS } from '../utils/funnel.ts';
@@ -21,6 +23,7 @@ import {
   parseRazorpayPaymentParams,
   createCustomerLicense,
   getActiveLicense,
+  isServerSignedLicense,
   CustomerLicense,
 } from '../utils/security.ts';
 
@@ -38,72 +41,109 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
   const [downloadTriggered, setDownloadTriggered] = useState(false);
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
   const [activePathTab, setActivePathTab] = useState<'30-minute' | 'practical' | 'builder'>('30-minute');
-  const [verifiedLicense, setVerifiedLicense] = useState<CustomerLicense | null>(() => getActiveLicense());
-  const [detectedPaymentId, setDetectedPaymentId] = useState<string | null>(null);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationError, setVerificationError] = useState<string | null>(null);
+
+  const initialParsed =
+    typeof window !== 'undefined' ? parseRazorpayPaymentParams(window.location.search) : { isPaid: false };
+
+  const [verifiedLicense, setVerifiedLicense] = useState<CustomerLicense | null>(() => {
+    // If a Razorpay payment callback is in the URL, wait for fresh server verification first
+    if (initialParsed.paymentId || initialParsed.status) {
+      return null;
+    }
+    const existing = getActiveLicense();
+    return isServerSignedLicense(existing) ? existing : null;
+  });
+  const [detectedPaymentId, setDetectedPaymentId] = useState<string | null>(
+    () => initialParsed.paymentId || null
+  );
+  const [isVerifying, setIsVerifying] = useState<boolean>(
+    () => Boolean(initialParsed.paymentId && initialParsed.isPaid)
+  );
+  const [verificationError, setVerificationError] = useState<string | null>(() => {
+    if (initialParsed.status && !initialParsed.isPaid) {
+      return 'Payment was not completed or was declined. Access cannot be granted until the transaction is verified as captured.';
+    }
+    return null;
+  });
 
   // Check for Razorpay payment callback in query params and verify server-side
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const parsed = parseRazorpayPaymentParams(window.location.search);
-      if (parsed.paymentId) {
-        setDetectedPaymentId(parsed.paymentId);
+    if (typeof window === 'undefined') return;
+    const parsed = parseRazorpayPaymentParams(window.location.search);
 
-        // Check if payment status is explicitly paid/captured
-        if (!parsed.isPaid) {
-          setVerificationError('Payment is pending or unconfirmed. Access cannot be granted until transaction is captured.');
-          return;
-        }
+    if (parsed.paymentId) {
+      setDetectedPaymentId(parsed.paymentId);
 
-        setIsVerifying(true);
-        fetch('/api/verify-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            paymentId: parsed.paymentId,
-            paymentLinkId: parsed.paymentLinkId,
-            signature: parsed.signature,
-            status: parsed.status || 'paid',
-          }),
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            if (data.verified && data.license) {
-              const lic = createCustomerLicense(
-                data.license.customerEmail || 'verified.customer@razorpay.com',
-                data.license.paymentId,
-                data.license.customerName || 'Handbook Customer',
-                data.license.token,
-                data.license.orderId
-              );
-              setVerifiedLicense(lic);
-              setVerificationError(null);
-            } else {
-              setVerificationError(data.message || 'Payment verification could not be completed.');
-            }
-          })
-          .catch(() => {
-            // If offline, check if existing active license exists in registry
-            const active = getActiveLicense();
-            if (active && active.status === 'active') {
-              setVerifiedLicense(active);
-            } else {
-              setVerificationError('Network error verifying payment with server.');
-            }
-          })
-          .finally(() => {
-            setIsVerifying(false);
-          });
+      // Reject explicit unpaid/failed/cancelled callback status
+      if (!parsed.isPaid) {
+        setVerifiedLicense(null);
+        setIsVerifying(false);
+        setVerificationError(
+          'Payment is pending, failed, or cancelled. Access cannot be granted until the transaction is captured.'
+        );
+        return;
       }
+
+      let cancelled = false;
+      setIsVerifying(true);
+      setVerificationError(null);
+
+      fetch('/api/verify-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentId: parsed.paymentId,
+          paymentLinkId: parsed.paymentLinkId,
+          orderId: parsed.orderId,
+          paymentLinkReferenceId: parsed.paymentLinkReferenceId,
+          signature: parsed.signature,
+          status: parsed.status || 'paid',
+        }),
+      })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (cancelled) return;
+
+          if (res.ok && data.verified && data.license && data.license.token) {
+            const lic = createCustomerLicense(
+              data.license.customerEmail || 'verified.customer@razorpay.com',
+              data.license.paymentId,
+              data.license.customerName || 'Handbook Customer',
+              data.license.token,
+              data.license.orderId
+            );
+            setVerifiedLicense(lic);
+            setVerificationError(null);
+          } else {
+            setVerifiedLicense(null);
+            setVerificationError(
+              data.message || 'Server payment verification failed. Access cannot be unlocked.'
+            );
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setVerifiedLicense(null);
+          setVerificationError('Unable to reach server to verify payment. Please try again or sign in.');
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsVerifying(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
     }
   }, []);
 
   const hasConfiguredDownload = isDownloadConfigured(FUNNEL_CONFIG.ebookDownloadUrl);
+  const hasVerifiedAccess = isServerSignedLicense(verifiedLicense);
 
-  const downloadUrl = verifiedLicense
+  const downloadUrl = hasVerifiedAccess
     ? `/api/download-ebook?token=${encodeURIComponent(verifiedLicense.token)}&orderId=${encodeURIComponent(verifiedLicense.orderId)}`
-    : FUNNEL_CONFIG.ebookDownloadUrl;
+    : undefined;
 
   const handleDownloadClick = () => {
     setDownloadTriggered(true);
@@ -125,9 +165,29 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
           </button>
 
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs font-mono text-emerald-400 font-semibold uppercase tracking-wider">
-              {verifiedLicense ? 'Verified Order Fulfillment' : 'Order Fulfillment Portal'}
+            <span
+              className={`w-2 h-2 rounded-full ${
+                hasVerifiedAccess
+                  ? 'bg-emerald-400 animate-pulse'
+                  : isVerifying
+                    ? 'bg-cyan-400 animate-pulse'
+                    : 'bg-amber-400'
+              }`}
+            />
+            <span
+              className={`text-xs font-mono font-semibold uppercase tracking-wider ${
+                hasVerifiedAccess
+                  ? 'text-emerald-400'
+                  : isVerifying
+                    ? 'text-cyan-400'
+                    : 'text-amber-400'
+              }`}
+            >
+              {hasVerifiedAccess
+                ? 'Verified Order Fulfillment'
+                : isVerifying
+                  ? 'Verifying Payment...'
+                  : 'Verification Required'}
             </span>
           </div>
         </div>
@@ -135,120 +195,170 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
 
       {/* Main Thank You / Delivery Section */}
       <main className="flex-1 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16 w-full">
-        
-        {/* Success Header Block */}
-        <div className="text-center max-w-2xl mx-auto mb-10">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-5 shadow-lg shadow-emerald-500/10">
-            <CheckCircle2 className="w-8 h-8" />
+        {isVerifying ? (
+          <div className="bg-slate-900/90 border border-slate-700/80 rounded-3xl p-8 sm:p-12 shadow-2xl text-center max-w-2xl mx-auto">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 mb-5">
+              <Loader2 className="w-7 h-7 animate-spin" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+              Verifying Your Payment...
+            </h1>
+            <p className="mt-3 text-sm text-slate-300 leading-relaxed">
+              Confirming your transaction directly with Razorpay on the server before unlocking your eBook license.
+            </p>
           </div>
-
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-            Thank You for Choosing the
-            <br />
-            <span className="bg-gradient-to-r from-cyan-400 via-sky-300 to-blue-400 bg-clip-text text-transparent">
-              Prompt Engineering Handbook
-            </span>
-          </h1>
-
-          <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-            Your digital copy and online reader access are ready. Start reading immediately in our protected online reader with bookmarking, or download the 81-page vector PDF.
-          </p>
-
-          {/* Payment verified pill */}
-          {detectedPaymentId && (
-            <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Razorpay Payment Verified: {detectedPaymentId}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Central Delivery Card */}
-        <div className="bg-slate-900/90 border border-slate-700/80 rounded-3xl p-6 sm:p-10 shadow-2xl mb-12 relative overflow-hidden">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
-            
-            {/* Left: Book Cover preview */}
-            <div className="md:col-span-5 flex justify-center">
-              <BookMockup size="sm" interactive={false} />
+        ) : !hasVerifiedAccess ? (
+          <div className="bg-slate-900/90 border border-slate-700/80 rounded-3xl p-8 sm:p-12 shadow-2xl text-center max-w-2xl mx-auto space-y-6">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+              <Lock className="w-7 h-7" />
             </div>
 
-            {/* Right: Primary Reading & Download Actions */}
-            <div className="md:col-span-7 flex flex-col justify-center text-left space-y-5">
-              
-              <div className="space-y-1">
-                <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold">
-                  Deliverable Package
-                </span>
-                <h3 className="text-xl sm:text-2xl font-bold text-white">
-                  {FUNNEL_CONFIG.productTitle}
-                </h3>
-                <p className="text-xs text-slate-400">
-                  {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Vector PDF &amp; Online Reader
-                </p>
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                Payment Verification Required
+              </h1>
+              <p className="mt-3 text-sm text-slate-300 leading-relaxed">
+                eBook download and online reader access are unlocked only after a verified purchase. Visiting this URL directly does not grant access.
+              </p>
+            </div>
+
+            {verificationError && (
+              <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-2.5 text-left">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-amber-300">Payment Status Notice</div>
+                  <div>{verificationError}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              {onNavigateLogin && (
+                <button
+                  onClick={onNavigateLogin}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 font-extrabold text-sm transition-all shadow-lg shadow-cyan-500/20 cursor-pointer"
+                >
+                  <Shield className="w-4 h-4 text-slate-950" />
+                  <span>Sign In / Verify Purchase</span>
+                </button>
+              )}
+
+              <button
+                onClick={onNavigateHome}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 py-3.5 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-sm transition-all cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4 text-cyan-400" />
+                <span>Return to Sales Page</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Success Header Block */}
+            <div className="text-center max-w-2xl mx-auto mb-10">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-5 shadow-lg shadow-emerald-500/10">
+                <CheckCircle2 className="w-8 h-8" />
               </div>
 
-              {/* File Specs Badges */}
-              <div className="flex flex-wrap gap-2 text-xs font-mono">
-                <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
-                  📄 81 Pages
+              <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
+                Thank You for Choosing the
+                <br />
+                <span className="bg-gradient-to-r from-cyan-400 via-sky-300 to-blue-400 bg-clip-text text-transparent">
+                  Prompt Engineering Handbook
                 </span>
-                <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
-                  ⚡ 100 Topics
-                </span>
-                <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-emerald-400">
-                  🔒 Dynamic DRM Watermark
-                </span>
-              </div>
+              </h1>
 
-              {/* Primary Dual Actions: Online Reader & Direct Download */}
-              <div className="space-y-3 pt-2">
-                {onNavigateReader && (
-                  <button
-                    onClick={onNavigateReader}
-                    className="w-full flex items-center justify-center gap-3 py-4 px-8 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 font-extrabold text-base transition-all shadow-xl shadow-cyan-500/25 active:scale-98 focus:outline-none focus:ring-2 focus:ring-cyan-300 cursor-pointer"
-                  >
-                    <BookOpen className="w-5 h-5 text-slate-950" />
-                    <span>Open Protected Online Reader</span>
-                    <ArrowRight className="w-4 h-4 text-slate-950" />
-                  </button>
-                )}
+              <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
+                Your digital copy and online reader access are ready. Start reading immediately in our protected online reader with bookmarking, or download the 81-page vector PDF.
+              </p>
 
-                {verificationError && (
-                  <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-2.5 text-left">
-                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-semibold text-amber-300">Payment Status Notice</div>
-                      <div>{verificationError}</div>
-                    </div>
+              {/* Payment verified pill */}
+              {(detectedPaymentId || verifiedLicense?.paymentId) && (
+                <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs font-mono">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Razorpay Payment Verified: {detectedPaymentId || verifiedLicense?.paymentId}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Central Delivery Card */}
+            <div className="bg-slate-900/90 border border-slate-700/80 rounded-3xl p-6 sm:p-10 shadow-2xl mb-12 relative overflow-hidden">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
+                
+                {/* Left: Book Cover preview */}
+                <div className="md:col-span-5 flex justify-center">
+                  <BookMockup size="sm" interactive={false} />
+                </div>
+
+                {/* Right: Primary Reading & Download Actions */}
+                <div className="md:col-span-7 flex flex-col justify-center text-left space-y-5">
+                  
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-amber-400 font-semibold">
+                      Deliverable Package
+                    </span>
+                    <h3 className="text-xl sm:text-2xl font-bold text-white">
+                      {FUNNEL_CONFIG.productTitle}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Vector PDF &amp; Online Reader
+                    </p>
                   </div>
-                )}
 
-                {hasConfiguredDownload && (
-                  <div className="space-y-2">
-                    <a
-                      href={downloadUrl}
-                      download="Digital-Govind-Watermarked-eBook.pdf"
-                      onClick={handleDownloadClick}
-                      className="w-full flex items-center justify-center gap-2.5 py-3 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs sm:text-sm transition-all cursor-pointer"
-                    >
-                      <Download className="w-4 h-4 text-cyan-400" />
-                      <span>Download Offline Official Watermarked PDF (~477 KB)</span>
-                    </a>
+                  {/* File Specs Badges */}
+                  <div className="flex flex-wrap gap-2 text-xs font-mono">
+                    <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
+                      📄 81 Pages
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300">
+                      ⚡ 100 Topics
+                    </span>
+                    <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-emerald-400">
+                      🔒 Dynamic DRM Watermark
+                    </span>
+                  </div>
 
-                    {downloadTriggered && (
-                      <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2 animate-fade-in">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Download initiated! Check your browser downloads folder.</span>
+                  {/* Primary Dual Actions: Online Reader & Direct Download */}
+                  <div className="space-y-3 pt-2">
+                    {onNavigateReader && (
+                      <button
+                        onClick={onNavigateReader}
+                        className="w-full flex items-center justify-center gap-3 py-4 px-8 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 hover:from-cyan-300 hover:to-blue-400 text-slate-950 font-extrabold text-base transition-all shadow-xl shadow-cyan-500/25 active:scale-98 focus:outline-none focus:ring-2 focus:ring-cyan-300 cursor-pointer"
+                      >
+                        <BookOpen className="w-5 h-5 text-slate-950" />
+                        <span>Open Protected Online Reader</span>
+                        <ArrowRight className="w-4 h-4 text-slate-950" />
+                      </button>
+                    )}
+
+                    {hasConfiguredDownload && downloadUrl && (
+                      <div className="space-y-2">
+                        <a
+                          href={downloadUrl}
+                          download="Digital-Govind-Watermarked-eBook.pdf"
+                          onClick={handleDownloadClick}
+                          className="w-full flex items-center justify-center gap-2.5 py-3 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs sm:text-sm transition-all cursor-pointer"
+                        >
+                          <Download className="w-4 h-4 text-cyan-400" />
+                          <span>Download Offline Official Watermarked PDF (~477 KB)</span>
+                        </a>
+
+                        {downloadTriggered && (
+                          <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2 animate-fade-in">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <span>Download initiated! Check your browser downloads folder.</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
 
+                </div>
+
+              </div>
             </div>
 
-          </div>
-        </div>
+
 
         {/* Reading Paths Section: Start Getting Value Right Away */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 sm:p-8 mb-12">
@@ -314,6 +424,8 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
             </div>
           </div>
         </div>
+          </>
+        )}
 
         {/* Security & Delivery Architecture Note */}
         <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-5 text-left mb-10">

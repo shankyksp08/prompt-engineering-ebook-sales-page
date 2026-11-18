@@ -111,6 +111,8 @@ export function generateLicenseToken(email: string, paymentId: string, timestamp
 export function parseRazorpayPaymentParams(search: string): {
   paymentId?: string;
   paymentLinkId?: string;
+  paymentLinkReferenceId?: string;
+  orderId?: string;
   status?: string;
   signature?: string;
   isPaid: boolean;
@@ -119,20 +121,45 @@ export function parseRazorpayPaymentParams(search: string): {
   const params = new URLSearchParams(search);
   const paymentId = params.get('razorpay_payment_id') || undefined;
   const paymentLinkId = params.get('razorpay_payment_link_id') || undefined;
+  const paymentLinkReferenceId = params.get('razorpay_payment_link_reference_id') || undefined;
+  const orderId = params.get('razorpay_order_id') || undefined;
   const status = params.get('razorpay_payment_link_status') || undefined;
   const signature = params.get('razorpay_signature') || undefined;
 
-  // Has payment ID
-  const isPaid = Boolean(paymentId);
+  const normalizedStatus = (status || '').toLowerCase().trim();
+  const isExplicitFailure =
+    normalizedStatus === 'failed' ||
+    normalizedStatus === 'cancelled' ||
+    normalizedStatus === 'expired' ||
+    normalizedStatus === 'created';
+
+  // Requires a paymentId and must not carry an explicit failed/cancelled/unpaid status
+  const isPaid = Boolean(paymentId) && !isExplicitFailure;
 
   return {
     paymentId,
     paymentLinkId,
+    paymentLinkReferenceId,
+    orderId,
     status,
     signature,
     isPaid,
   };
 }
+
+/**
+ * Checks whether a stored CustomerLicense carries a server-issued signed token (<payload>.<signature>)
+ */
+export function isServerSignedLicense(license: CustomerLicense | null | undefined): license is CustomerLicense {
+  return Boolean(
+    license &&
+      license.status === 'active' &&
+      typeof license.token === 'string' &&
+      license.token.includes('.') &&
+      !license.token.startsWith('LIC-')
+  );
+}
+
 
 /**
  * Get all stored customer licenses (local registry)

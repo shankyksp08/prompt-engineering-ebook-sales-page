@@ -7,7 +7,8 @@ import {
   calculateDiscountPercent,
   isValidEmail,
   formatByteSize,
-  READING_PATHS
+  READING_PATHS,
+  resolveAppRoute,
 } from './funnel.ts';
 
 test('isValidCheckoutUrl correctly identifies placeholders and real links', () => {
@@ -62,3 +63,15 @@ test('READING_PATHS contains 3 core paths from Preface', () => {
   assert.equal(READING_PATHS[2].id, 'builder');
   assert.ok(READING_PATHS[0].recommendedTopics.length > 3);
 });
+
+test('resolveAppRoute handles /thank-you with or without trailing slash and query string', () => {
+  assert.equal(resolveAppRoute('/'), '/');
+  assert.equal(resolveAppRoute('/thank-you'), '/thank-you');
+  assert.equal(resolveAppRoute('/thank-you/'), '/thank-you');
+  assert.equal(resolveAppRoute('/thank-you?razorpay_payment_id=pay_123'), '/thank-you');
+  assert.equal(resolveAppRoute('/reader'), '/reader');
+  assert.equal(resolveAppRoute('/login/'), '/login');
+  assert.equal(resolveAppRoute('/admin'), '/admin');
+  assert.equal(resolveAppRoute('/unknown-path'), '/');
+});
+

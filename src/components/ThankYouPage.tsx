@@ -1,22 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Download,
   CheckCircle2,
-  FileText,
   AlertCircle,
   ArrowLeft,
   BookOpen,
   Shield,
-  Layers,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
-  Sparkles,
   ArrowRight,
   Lock,
   Loader2,
 } from 'lucide-react';
-import { FUNNEL_CONFIG, isDownloadConfigured } from '../config/funnelConfig.ts';
+import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
 import { READING_PATHS } from '../utils/funnel.ts';
 import { BookMockup } from './BookMockup.tsx';
 import {
@@ -38,7 +33,6 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
   onNavigateReader,
   onNavigateLogin,
 }) => {
-  const [downloadTriggered, setDownloadTriggered] = useState(false);
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
   const [activePathTab, setActivePathTab] = useState<'30-minute' | 'practical' | 'builder'>('30-minute');
 
@@ -138,16 +132,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
     }
   }, []);
 
-  const hasConfiguredDownload = isDownloadConfigured(FUNNEL_CONFIG.ebookDownloadUrl);
   const hasVerifiedAccess = isServerSignedLicense(verifiedLicense);
-
-  const downloadUrl = hasVerifiedAccess
-    ? `/api/download-ebook?token=${encodeURIComponent(verifiedLicense.token)}&orderId=${encodeURIComponent(verifiedLicense.orderId)}`
-    : undefined;
-
-  const handleDownloadClick = () => {
-    setDownloadTriggered(true);
-  };
 
   const selectedPath = READING_PATHS.find((p) => p.id === activePathTab) || READING_PATHS[0];
 
@@ -218,7 +203,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                 Payment Verification Required
               </h1>
               <p className="mt-3 text-sm text-slate-300 leading-relaxed">
-                eBook download and online reader access are unlocked only after a verified purchase. Visiting this URL directly does not grant access.
+                Online reader access is unlocked only after a verified purchase. Visiting this URL directly does not grant access.
               </p>
             </div>
 
@@ -269,7 +254,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
               </h1>
 
               <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed">
-                Your digital copy and online reader access are ready. Start reading immediately in our protected online reader with bookmarking, or download the 81-page vector PDF.
+                Your protected online reader access is ready. Start reading all 81 pages immediately inside our secure browser reader with bookmarking and topic progress tracking.
               </p>
 
               {/* Payment verified pill */}
@@ -290,7 +275,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                   <BookMockup size="sm" interactive={false} />
                 </div>
 
-                {/* Right: Primary Reading & Download Actions */}
+                {/* Right: Protected Online Reader Action */}
                 <div className="md:col-span-7 flex flex-col justify-center text-left space-y-5">
                   
                   <div className="space-y-1">
@@ -301,7 +286,7 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                       {FUNNEL_CONFIG.productTitle}
                     </h3>
                     <p className="text-xs text-slate-400">
-                      {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Vector PDF &amp; Online Reader
+                      {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate} · Protected Online Reader Only
                     </p>
                   </div>
 
@@ -314,11 +299,11 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                       ⚡ 100 Topics
                     </span>
                     <span className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-emerald-400">
-                      🔒 Dynamic DRM Watermark
+                      🔒 Dynamic Digital Govind Watermark
                     </span>
                   </div>
 
-                  {/* Primary Dual Actions: Online Reader & Direct Download */}
+                  {/* Primary Action: Online Reader Only */}
                   <div className="space-y-3 pt-2">
                     {onNavigateReader && (
                       <button
@@ -331,26 +316,10 @@ export const ThankYouPage: React.FC<ThankYouPageProps> = ({
                       </button>
                     )}
 
-                    {hasConfiguredDownload && downloadUrl && (
-                      <div className="space-y-2">
-                        <a
-                          href={downloadUrl}
-                          download="Digital-Govind-Watermarked-eBook.pdf"
-                          onClick={handleDownloadClick}
-                          className="w-full flex items-center justify-center gap-2.5 py-3 px-6 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs sm:text-sm transition-all cursor-pointer"
-                        >
-                          <Download className="w-4 h-4 text-cyan-400" />
-                          <span>Download Offline Official Watermarked PDF (~477 KB)</span>
-                        </a>
-
-                        {downloadTriggered && (
-                          <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2 animate-fade-in">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <span>Download initiated! Check your browser downloads folder.</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <p className="text-[11px] text-slate-400 flex items-center gap-1.5 pt-1">
+                      <Lock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span>Online-only access: PDF file downloads are disabled to protect intellectual property.</span>
+                    </p>
                   </div>
 
                 </div>

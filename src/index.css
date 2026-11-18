@@ -175,12 +175,36 @@ body {
   }
 }
 
+/* Protected Online Reader surface (blocks iOS/Android touch callout, drag, selection) */
+.protected-reader-surface {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.protected-reader-surface canvas {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 @media print {
+  @page {
+    margin: 0;
+  }
+  html,
   body {
+    background: #ffffff !important;
+  }
+  body > * {
+    display: none !important;
     visibility: hidden !important;
   }
   body::before {
-    content: "Protected Content: Printing and offline document extraction are restricted by digital rights management.";
+    content: "Protected Content — Digital Govind Prompt Engineering Handbook: Printing, saving, and offline extraction are disabled for this online-only edition.";
     visibility: visible !important;
     display: block !important;
     padding: 3rem !important;

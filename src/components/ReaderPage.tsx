@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
   BookOpen,
   ArrowLeft,
@@ -20,12 +22,11 @@ import {
   X,
   AlertTriangle,
   Lock,
-  ExternalLink,
   ZoomIn,
   ZoomOut,
-  Download,
   FileText,
   Layers,
+  Loader2,
 } from 'lucide-react';
 import { BOOK_PARTS, CURATED_TOPICS, BOOK_SAMPLE_PAGES } from '../data/bookData.ts';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
@@ -41,6 +42,8 @@ import {
   generateWatermarkText,
   revokeDeviceSession,
 } from '../utils/security.ts';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface ReaderPageProps {
   onNavigateHome: () => void;
@@ -65,14 +68,25 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   const [theme, setTheme] = useState<'slate' | 'oled' | 'sepia'>('slate');
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
-  const [isWindowObscured, setIsWindowObscured] = useState(false);
-  const [securityToast, setSecurityToast] = useState<string | null>(null);
   const [fullScreen, setFullScreen] = useState(false);
 
   const [viewMode, setViewMode] = useState<'pdf' | 'notes'>('pdf');
   const [currentPage, setCurrentPage] = useState<number>(() => progress.lastReadPage || 1);
+  const [totalPages, setTotalPages] = useState<number>(81);
   const [zoomPercent, setZoomPercent] = useState<number>(100);
-  const totalPages = 81;
+
+  // Canvas-based secure PDF document state (no <iframe src>, no internal PDF sidebar, no download controls)
+  const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const [pdfLoading, setPdfLoading] = useState<boolean>(false);
+  const [pdfRendering, setPdfRendering] = useState<boolean>(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(820);
+
+  const readerRootRef = useRef<HTMLDivElement | null>(null);
+  const watermarkOverlayRef = useRef<HTMLDivElement | null>(null);
+  const pdfViewportRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const nativeFullscreenRef = useRef<boolean>(false);
 
   // Verify active license cryptographically with the server before unlocking reader UI
   useEffect(() => {
@@ -91,12 +105,15 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     let cancelled = false;
     setIsVerifyingLicense(true);
 
-    const params = new URLSearchParams({
-      token: active.token,
-      orderId: active.orderId,
-    });
-
-    fetch(`/api/stream-pdf?${params.toString()}`, { method: 'HEAD' })
+    fetch('/api/stream-pdf', {
+      method: 'HEAD',
+      headers: {
+        Authorization: `Bearer ${active.token}`,
+        'X-Order-Id': active.orderId,
+        'X-Reader-Session': 'dg-online-reader-v1',
+      },
+      cache: 'no-store',
+    })
       .then((res) => {
         if (cancelled) return;
         if (res.ok) {
@@ -122,70 +139,245 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     };
   }, []);
 
+  // Watermark text generator (includes Digital Govind branding + verified customer email)
+  const watermark = useMemo(() => {
+    if (!license) return null;
+    return generateWatermarkText(license);
+  }, [license]);
+
+  // Fetch authenticated PDF stream into memory (never exposed via URL, iframe, or download link)
+  useEffect(() => {
+    if (!license || !serverVerified) {
+      setPdfDoc(null);
+      return;
+    }
+
+    let cancelled = false;
+    let loadingTask: pdfjsLib.PDFDocumentLoadingTask | null = null;
+    let loadedDoc: pdfjsLib.PDFDocumentProxy | null = null;
+
+    setPdfLoading(true);
+    setPdfError(null);
+
+    fetch('/api/reader/stream-pdf', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${license.token}`,
+        'X-Order-Id': license.orderId,
+        'X-Reader-Session': 'dg-online-reader-v1',
+      },
+      cache: 'no-store',
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.message || `Reader authentication error (HTTP ${res.status}).`);
+        }
+        return res.arrayBuffer();
+      })
+      .then(async (buffer) => {
+        if (cancelled) return;
+        loadingTask = pdfjsLib.getDocument({
+          data: new Uint8Array(buffer),
+          disableAutoFetch: true,
+          disableStream: true,
+        });
+        loadedDoc = await loadingTask.promise;
+        if (cancelled) {
+          await loadingTask.destroy();
+          return;
+        }
+        setTotalPages(loadedDoc.numPages || 81);
+        setPdfDoc(loadedDoc);
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setPdfError(err?.message || 'Unable to load protected handbook pages. Please sign in again.');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPdfLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (loadingTask) {
+        loadingTask.destroy().catch(() => {});
+      }
+    };
+  }, [license, serverVerified]);
+
+  // Track PDF viewport container width for crisp responsive canvas sizing across phones, tablets & desktops
+  useEffect(() => {
+    const el = pdfViewportRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const updateWidth = () => {
+      const nextWidth = el.clientWidth;
+      if (nextWidth > 200) {
+        setContainerWidth(nextWidth);
+      }
+    };
+
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [viewMode, fullScreen, sidebarOpen, serverVerified]);
+
+  // Render active PDF page onto protected HTML5 <canvas> and composite pixel-level Digital Govind watermark
+  useEffect(() => {
+    if (viewMode !== 'pdf' || !pdfDoc || !canvasRef.current || !watermark) return;
+
+    let cancelled = false;
+    let renderTask: pdfjsLib.RenderTask | null = null;
+    const safePage = Math.min(Math.max(1, currentPage), pdfDoc.numPages || 81);
+
+    setPdfRendering(true);
+
+    pdfDoc
+      .getPage(safePage)
+      .then(async (page) => {
+        if (cancelled || !canvasRef.current) return;
+
+        const baseViewport = page.getViewport({ scale: 1 });
+        const horizontalPadding = containerWidth < 520 ? 16 : 48;
+        const availableWidth = Math.max(containerWidth - horizontalPadding, 280);
+        const fitScale = Math.min(Math.max(availableWidth / baseViewport.width, 0.45), 1.55);
+        const effectiveScale = fitScale * (zoomPercent / 100);
+        const viewport = page.getViewport({ scale: effectiveScale });
+        const dpr = Math.min(window.devicePixelRatio || 1, 2.25);
+
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
+
+        canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+        canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        renderTask = page.render({
+          canvas,
+          viewport,
+          transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+        });
+
+        await renderTask.promise;
+        if (cancelled) return;
+
+        // Composite repeating Digital Govind + Verified Customer Email watermark directly onto rendered canvas pixels
+        ctx.save();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const stepX = 280;
+        const stepY = 170;
+        ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        for (let y = -60; y < viewport.height + 120; y += stepY) {
+          for (let x = -60; x < viewport.width + 120; x += stepX) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate((-24 * Math.PI) / 180);
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.085)';
+            ctx.fillText(watermark.canvasLabel, 0, -7);
+            ctx.fillStyle = 'rgba(2, 132, 199, 0.09)';
+            ctx.fillText(`DIGITAL GOVIND · ${license?.orderId || ''}`, 0, 8);
+            ctx.restore();
+          }
+        }
+        ctx.restore();
+      })
+      .catch((err: any) => {
+        if (cancelled || err?.name === 'RenderingCancelledException') return;
+        console.warn('[Reader] PDF page render error:', err?.message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPdfRendering(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (renderTask) {
+        try {
+          renderTask.cancel();
+        } catch {
+          // Ignore cancel errors
+        }
+      }
+    };
+  }, [viewMode, pdfDoc, currentPage, zoomPercent, containerWidth, watermark, license?.orderId]);
+
   // Update last read topic in progress
   useEffect(() => {
     const updated = saveReadingProgress({ lastReadTopicId: currentTopicId, lastReadPage: currentPage });
     setProgress(updated);
   }, [currentTopicId, currentPage]);
 
-  // Authenticated PDF stream URL (served strictly from private storage)
-  const pdfStreamUrl = useMemo(() => {
-    if (!license) return '';
-    const params = new URLSearchParams({
-      token: license.token,
-      orderId: license.orderId,
-    });
-    return `/api/reader/stream-pdf?${params.toString()}#page=${currentPage}&zoom=${zoomPercent}`;
-  }, [license, currentPage, zoomPercent]);
-
-  // Authenticated offline download URL
-  const offlineDownloadUrl = useMemo(() => {
-    if (!license) return '';
-    return `/api/download-ebook?token=${encodeURIComponent(license.token)}&orderId=${encodeURIComponent(license.orderId)}`;
-  }, [license]);
-
-  // Anti-Screenshot & Screen Capture Deterrence Listeners
+  // Sync fullscreen exit and quietly block print/save shortcuts without interrupting reading
   useEffect(() => {
-    const handleBlur = () => {
-      // Obscure reader canvas when window loses focus (e.g. screen snipping tools or switching apps)
-      setIsWindowObscured(true);
-    };
+    if (!serverVerified) return;
 
-    const handleFocus = () => {
-      setIsWindowObscured(false);
+    const handleFullscreenChange = () => {
+      const fsEl =
+        document.fullscreenElement || (document as any).webkitFullscreenElement || null;
+      if (!fsEl && nativeFullscreenRef.current) {
+        nativeFullscreenRef.current = false;
+        setFullScreen(false);
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Block Print (Ctrl+P / Cmd+P)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+      const key = (e.key || '').toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && (key === 'p' || key === 's')) {
         e.preventDefault();
-        showSecurityAlert('Printing is disabled to protect copyrighted eBook content.');
-      }
-      // Block Save Page (Ctrl+S / Cmd+S)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        showSecurityAlert('Saving offline copies is disabled. Content is protected by DRM.');
-      }
-      // Warn on PrintScreen
-      if (e.key === 'PrintScreen') {
-        showSecurityAlert('Screen capture attempted. Dynamic customer watermark is embedded.');
       }
     };
 
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    window.addEventListener('keydown', handleKeyDown, true);
 
     return () => {
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      window.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, []);
+  }, [serverVerified]);
 
-  const showSecurityAlert = (msg: string) => {
-    setSecurityToast(msg);
-    setTimeout(() => setSecurityToast(null), 4000);
+  const handleToggleFullscreen = async () => {
+    const nextState = !fullScreen;
+    setFullScreen(nextState);
+
+    const targetEl = pdfViewportRef.current as any;
+    try {
+      if (nextState && targetEl) {
+        if (targetEl.requestFullscreen) {
+          nativeFullscreenRef.current = true;
+          await targetEl.requestFullscreen();
+        } else if (targetEl.webkitRequestFullscreen) {
+          nativeFullscreenRef.current = true;
+          await targetEl.webkitRequestFullscreen();
+        }
+      } else if (!nextState) {
+        nativeFullscreenRef.current = false;
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitFullscreenElement && (document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+      }
+    } catch {
+      // Fallback to CSS fixed fullscreen gracefully (e.g. iPhone Safari)
+      nativeFullscreenRef.current = false;
+    }
   };
 
   // Build flattened topic index (all 100 topics)
@@ -213,7 +405,9 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
 
   const currentTopic = allTopics.find((t) => t.id === currentTopicId) || allTopics[0];
   const curatedDetail = CURATED_TOPICS.find((c) => c.id === currentTopicId);
-  const sampleExcerpt = BOOK_SAMPLE_PAGES.find((s) => s.title.toLowerCase() === currentTopic.title.toLowerCase());
+  const sampleExcerpt = BOOK_SAMPLE_PAGES.find(
+    (s) => s.title.toLowerCase() === currentTopic.title.toLowerCase()
+  );
 
   const isCompleted = progress.completedTopicIds.includes(currentTopicId);
   const isBookmarked = progress.bookmarkedTopicIds.includes(currentTopicId);
@@ -246,15 +440,6 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     }
   };
 
-  // Watermark text generator
-  const watermark = useMemo(() => {
-    if (!license) return null;
-    return generateWatermarkText(license);
-  }, [license]);
-
-  // Overall reading progress calculation
-  const progressPercent = Math.round((progress.completedTopicIds.length / allTopics.length) * 100);
-
   // Show verification spinner while checking server license signature
   if (isVerifyingLicense) {
     return (
@@ -264,7 +449,9 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
             <Shield className="w-6 h-6" />
           </div>
           <h2 className="text-lg font-bold text-white">Verifying License Access...</h2>
-          <p className="text-xs text-slate-400">Validating your cryptographic eBook license with the server.</p>
+          <p className="text-xs text-slate-400">
+            Validating your cryptographic Digital Govind eBook license with the server.
+          </p>
         </div>
       </div>
     );
@@ -347,16 +534,35 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   }[theme];
 
   return (
-    <div className={`min-h-screen ${themeClasses} flex flex-col font-sans select-none relative overflow-x-hidden`}>
-      
-      {/* Dynamic Anti-Leak Customer Watermark Overlay (Repeated Grid) */}
+    <div
+      id="protected-reader-root"
+      ref={readerRootRef}
+      onContextMenu={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.tagName === 'INPUT') return;
+        e.preventDefault();
+      }}
+      onDragStart={(e) => e.preventDefault()}
+      onCopy={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('[data-allow-copy="true"]')) return;
+        e.preventDefault();
+      }}
+      onCut={(e) => e.preventDefault()}
+      className={`min-h-screen ${themeClasses} flex flex-col font-sans select-none protected-reader-surface relative overflow-x-hidden`}
+    >
+      {/* Dynamic Anti-Leak Customer Watermark Overlay (Repeated Grid across all reader pages) */}
       {watermark && (
         <div
+          ref={watermarkOverlayRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-40 overflow-hidden select-none opacity-[0.06] flex flex-wrap gap-24 p-8 items-center justify-around transform -rotate-12"
+          className="pointer-events-none fixed inset-0 z-40 overflow-hidden select-none opacity-[0.075] flex flex-wrap gap-20 sm:gap-24 p-6 sm:p-8 items-center justify-around transform -rotate-12"
         >
           {Array.from({ length: 24 }).map((_, i) => (
-            <div key={i} className="text-[11px] font-mono leading-tight tracking-wider text-slate-400 text-center">
+            <div
+              key={i}
+              className="text-[11px] font-mono leading-tight tracking-wider text-slate-300 text-center"
+            >
               <div>{watermark.primary}</div>
               <div>{watermark.secondary}</div>
             </div>
@@ -364,33 +570,11 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         </div>
       )}
 
-      {/* Security Toast Notification */}
-      {securityToast && (
-        <div className="fixed top-16 right-4 z-50 p-4 rounded-xl bg-amber-950/90 border border-amber-500 text-amber-200 text-xs flex items-center gap-3 shadow-2xl animate-fade-in max-w-sm">
-          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
-          <span>{securityToast}</span>
-        </div>
-      )}
-
-      {/* Screen Capture / Inactive Window Obscurity Overlay */}
-      {isWindowObscured && (
-        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center animate-fade-in">
-          <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center mb-4">
-            <Shield className="w-6 h-6" />
-          </div>
-          <h3 className="text-lg font-bold text-white mb-2">Content Hidden While Window Is Inactive</h3>
-          <p className="text-xs text-slate-400 max-w-md">
-            The handbook text is protected against unauthorized background recording. Click back into the window to resume reading.
-          </p>
-        </div>
-      )}
-
       {/* Top Navigation & Reader Controls */}
-      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-30 py-3 px-4 sm:px-6">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          
+      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-30 py-3 px-2.5 sm:px-6">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-1.5 sm:gap-4">
           {/* Left: Home & Topic Navigator Trigger */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button
               onClick={onNavigateHome}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
@@ -401,54 +585,48 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
 
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
             >
-              <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="hidden sm:inline">Table of Contents</span>
+              <BookOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="hidden lg:inline">Table of Contents</span>
               <span className="font-mono text-amber-400 text-[11px] bg-slate-900 px-1.5 py-0.5 rounded">
-                Topic {currentTopicId}/100
+                <span className="hidden sm:inline">Topic </span>{currentTopicId}/100
               </span>
             </button>
           </div>
 
-          {/* Center: Mode Switcher & Progress */}
-          <div className="flex items-center gap-3">
+          {/* Center: Mode Switcher */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
               <button
                 onClick={() => setViewMode('pdf')}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
                   viewMode === 'pdf'
                     ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <FileText className="w-3.5 h-3.5" />
-                <span>eBook PDF (81 Pages)</span>
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden lg:inline">eBook Reader ({totalPages} Pages)</span>
+                <span className="lg:hidden">Reader</span>
               </button>
               <button
                 onClick={() => setViewMode('notes')}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
                   viewMode === 'notes'
                     ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Topic Notes (100)</span>
-                <span className="sm:hidden">Notes</span>
+                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden lg:inline">Topic Notes (100)</span>
+                <span className="lg:hidden">Notes</span>
               </button>
-            </div>
-
-            <div className="hidden xl:flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-full border border-slate-800 text-xs">
-              <span className="text-[11px] font-mono text-cyan-400">
-                {viewMode === 'pdf' ? `Page ${currentPage} / ${totalPages}` : `${progress.completedTopicIds.length}/100 Complete`}
-              </span>
             </div>
           </div>
 
           {/* Right: Display Settings & Customer Session */}
-          <div className="flex items-center gap-2">
-            
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {/* Font Size Selector */}
             <div className="hidden sm:flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
               <button
@@ -478,7 +656,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 else if (theme === 'oled') setTheme('sepia');
                 else setTheme('slate');
               }}
-              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-mono transition-colors"
+              className="p-1.5 sm:p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-xs font-mono transition-colors"
               title={`Switch Theme (Current: ${theme.toUpperCase()})`}
             >
               <Sliders className="w-4 h-4" />
@@ -487,7 +665,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
             {/* Customer Session & DRM Details Trigger */}
             <button
               onClick={() => setSessionModalOpen(true)}
-              className="flex items-center gap-1.5 py-1.5 px-2.5 rounded-xl bg-cyan-950/40 border border-cyan-800/60 text-cyan-300 hover:bg-cyan-900/40 text-xs transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 py-1.5 px-2 sm:px-2.5 rounded-xl bg-cyan-950/40 border border-cyan-800/60 text-cyan-300 hover:bg-cyan-900/40 text-xs transition-colors cursor-pointer"
               title="Customer Account & DRM Status"
             >
               <Shield className="w-3.5 h-3.5 text-cyan-400" />
@@ -496,13 +674,11 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
               </span>
             </button>
           </div>
-
         </div>
       </header>
 
       {/* Main Reader Viewport */}
       <div className="flex-1 flex max-w-7xl mx-auto w-full relative">
-        
         {/* Collapsible Table of Contents Sidebar */}
         <aside
           className={`fixed lg:sticky top-16 left-0 z-30 h-[calc(100vh-4rem)] w-80 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-300 ${
@@ -518,7 +694,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search 100 topics..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 select-text"
               />
               {searchQuery && (
                 <button
@@ -572,8 +748,8 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
 
           {/* Sidebar Footer */}
           <div className="p-3 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
-            <span>First Edition (October 2026)</span>
-            <span className="font-mono text-cyan-400">81 Pages</span>
+            <span>Digital Govind · Online Only</span>
+            <span className="font-mono text-cyan-400">{totalPages} Pages</span>
           </div>
         </aside>
 
@@ -586,31 +762,29 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
         )}
 
         {/* Active Reader Content Pane */}
-        <main className="flex-1 p-3 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full">
-          
+        <main className="flex-1 px-2.5 py-3 sm:p-6 lg:p-8 max-w-5xl mx-auto w-full">
           {viewMode === 'pdf' ? (
-            /* Dedicated Watermarked eBook PDF Reader */
+            /* Clean Canvas-Rendered Online Handbook Reader (No internal PDF sidebar, no download/print buttons) */
             <div className="space-y-4">
-              
-              {/* PDF Reader Toolbar */}
-              <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-                
-                {/* Page Navigation */}
-                <div className="flex items-center gap-2">
+              {/* Simplified Single-Row Reader Toolbar */}
+              <div className="p-2.5 sm:px-4 sm:py-3 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex items-center justify-between gap-1.5 sm:gap-3 text-xs">
+                {/* Previous / Page Number / Next */}
+                <div className="flex items-center gap-1 sm:gap-2">
                   <button
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                     disabled={currentPage <= 1}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
+                    className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
                     title="Previous Page"
                   >
                     <ChevronLeft className="w-4 h-4" />
-                    <span className="hidden sm:inline">Prev</span>
+                    <span className="hidden sm:inline">Previous</span>
                   </button>
 
-                  <div className="flex items-center gap-1.5 font-mono bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-white">
-                    <span>Page</span>
+                  <div className="flex items-center gap-1 sm:gap-1.5 font-mono bg-slate-950 px-2 sm:px-3 py-1 rounded-xl border border-slate-800 text-white">
+                    <span className="hidden sm:inline text-slate-400">Page</span>
                     <input
                       type="number"
+                      aria-label="Current page number"
                       min={1}
                       max={totalPages}
                       value={currentPage}
@@ -620,7 +794,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                           setCurrentPage(val);
                         }
                       }}
-                      className="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-cyan-400 font-bold focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                      className="w-9 sm:w-11 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-center text-cyan-400 font-bold focus:outline-none focus:ring-1 focus:ring-cyan-400 select-text"
                     />
                     <span className="text-slate-400">/ {totalPages}</span>
                   </div>
@@ -628,7 +802,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   <button
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                     disabled={currentPage >= totalPages}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
+                    className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 transition-colors cursor-pointer"
                     title="Next Page"
                   >
                     <span className="hidden sm:inline">Next</span>
@@ -636,103 +810,53 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   </button>
                 </div>
 
-                {/* Zoom Controls */}
-                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                  <button
-                    onClick={() => setZoomPercent((z) => Math.max(50, z - 15))}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
-                    title="Zoom Out"
-                  >
-                    <ZoomOut className="w-4 h-4" />
-                  </button>
-                  <span className="px-2 font-mono text-[11px] text-cyan-400 font-semibold min-w-[48px] text-center">
-                    {zoomPercent}%
-                  </span>
-                  <button
-                    onClick={() => setZoomPercent((z) => Math.min(200, z + 15))}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
-                    title="Zoom In"
-                  >
-                    <ZoomIn className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Actions: Download Offline Copy & Fullscreen */}
-                <div className="flex items-center gap-2 ml-auto">
-                  <a
-                    href={offlineDownloadUrl}
-                    download="Digital-Govind-Watermarked-eBook.pdf"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/25 transition-all text-xs font-semibold cursor-pointer"
-                    title="Download offline watermarked PDF copy"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Download PDF (~477 KB)</span>
-                    <span className="sm:hidden">Download</span>
-                  </a>
+                {/* Simple Zoom & Fullscreen Controls */}
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <div className="flex items-center gap-0.5 sm:gap-1 bg-slate-950 p-0.5 sm:p-1 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => setZoomPercent((z) => Math.max(60, z - 15))}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                      title="Zoom Out"
+                    >
+                      <ZoomOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    </button>
+                    <span className="px-1 sm:px-2 font-mono text-[11px] text-cyan-400 font-semibold min-w-[38px] sm:min-w-[44px] text-center">
+                      {zoomPercent}%
+                    </span>
+                    <button
+                      onClick={() => setZoomPercent((z) => Math.min(200, z + 15))}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                      title="Zoom In"
+                    >
+                      <ZoomIn className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    </button>
+                  </div>
 
                   <button
-                    onClick={() => setFullScreen(!fullScreen)}
-                    className="p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800/80 hover:bg-slate-800 transition-colors"
+                    onClick={handleToggleFullscreen}
+                    className="p-1.5 sm:p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800/80 hover:bg-slate-800 transition-colors cursor-pointer"
                     title={fullScreen ? 'Exit Fullscreen' : 'Fullscreen View'}
                   >
                     {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                   </button>
                 </div>
-
               </div>
 
-              {/* Quick Jump Bar by Chapters */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-mono scrollbar-none">
-                <span className="text-slate-500 uppercase tracking-wider shrink-0 px-1">Quick Jump:</span>
-                <button
-                  onClick={() => setCurrentPage(1)}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
-                    currentPage === 1 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Cover (p. 1)
-                </button>
-                <button
-                  onClick={() => setCurrentPage(5)}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
-                    currentPage === 5 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Contents (p. 5)
-                </button>
-                <button
-                  onClick={() => setCurrentPage(9)}
-                  className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
-                    currentPage === 9 ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Preface (p. 9)
-                </button>
-                {BOOK_PARTS.map((part) => (
-                  <button
-                    key={part.partNumber}
-                    onClick={() => setCurrentPage(part.page)}
-                    className={`px-2.5 py-1 rounded-lg shrink-0 transition-colors cursor-pointer ${
-                      currentPage === part.page ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'bg-slate-900 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Part {part.partNumber} (p. {part.page})
-                  </button>
-                ))}
-              </div>
-
-              {/* PDF Viewport Container */}
+              {/* Spacious Canvas PDF Viewport Container */}
               <div
+                ref={pdfViewportRef}
                 className={`relative rounded-3xl border border-slate-800 bg-slate-950 overflow-hidden shadow-2xl transition-all ${
-                  fullScreen ? 'fixed inset-4 z-50 bg-slate-950 flex flex-col' : ''
+                  fullScreen ? 'fixed inset-2 sm:inset-4 z-50 bg-slate-950 flex flex-col' : ''
                 }`}
               >
                 {fullScreen && (
-                  <div className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center text-xs">
-                    <span className="font-mono text-cyan-400">Digital Govind – Fullscreen Reader (Page {currentPage} of {totalPages})</span>
+                  <div className="p-3 bg-slate-900 border-b border-slate-800 flex justify-between items-center text-xs shrink-0">
+                    <span className="font-mono text-cyan-400">
+                      Digital Govind – Online Reader (Page {currentPage} of {totalPages})
+                    </span>
                     <button
-                      onClick={() => setFullScreen(false)}
-                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 text-white"
+                      onClick={handleToggleFullscreen}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 text-white cursor-pointer"
                     >
                       <Minimize2 className="w-3.5 h-3.5" />
                       <span>Close Fullscreen</span>
@@ -740,40 +864,62 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   </div>
                 )}
 
-                <iframe
-                  key={`${currentPage}-${zoomPercent}`}
-                  src={pdfStreamUrl}
-                  title="Digital Govind Prompt Engineering Handbook"
-                  className={`w-full bg-slate-900 border-0 ${fullScreen ? 'flex-1 h-full' : 'h-[75vh] min-h-[600px]'}`}
-                />
+                <div
+                  className={`w-full flex justify-center items-start p-2 sm:p-6 md:p-8 bg-slate-900/95 relative ${
+                    fullScreen ? 'flex-1 h-full overflow-auto' : 'overflow-x-auto min-h-[520px]'
+                  }`}
+                  style={{ touchAction: 'pan-x pan-y pinch-zoom' }}
+                >
+                  {pdfLoading ? (
+                    <div className="flex flex-col items-center justify-center py-24 text-center space-y-3">
+                      <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
+                      <p className="text-xs font-mono text-slate-300">
+                        Loading Digital Govind handbook pages...
+                      </p>
+                    </div>
+                  ) : pdfError ? (
+                    <div className="max-w-md my-16 p-6 rounded-2xl bg-rose-950/40 border border-rose-500/40 text-center space-y-3">
+                      <AlertTriangle className="w-7 h-7 text-rose-400 mx-auto" />
+                      <h3 className="text-sm font-bold text-white">Reader Stream Unavailable</h3>
+                      <p className="text-xs text-rose-200">{pdfError}</p>
+                    </div>
+                  ) : (
+                    <div className="relative inline-block shadow-2xl rounded-xl overflow-hidden">
+                      <canvas
+                        ref={canvasRef}
+                        onContextMenu={(e) => e.preventDefault()}
+                        onDragStart={(e) => e.preventDefault()}
+                        className="block rounded-xl bg-white max-w-none"
+                      />
+                      {pdfRendering && (
+                        <div className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-slate-900/85 border border-slate-700 text-[10px] font-mono text-cyan-300 flex items-center gap-1.5">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>Rendering...</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Security & License Notice Under Reader */}
-              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
-                <div className="flex items-center gap-2">
+              {/* Licensed Customer & Order Info Footer (No Download Controls) */}
+              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80 flex flex-wrap items-center justify-between gap-2 sm:gap-3 text-xs text-slate-400">
+                <div className="flex items-center gap-2 min-w-0">
                   <Shield className="w-4 h-4 text-cyan-400 shrink-0" />
-                  <span>
+                  <span className="truncate">
                     Licensed to <strong className="text-white">{license.customerEmail}</strong> · Order #{license.orderId}
                   </span>
                 </div>
-                <div className="flex items-center gap-3 text-[11px] font-mono">
-                  <span>Reading progress auto-saved</span>
-                  <a
-                    href={offlineDownloadUrl}
-                    download="Digital-Govind-Watermarked-eBook.pdf"
-                    className="text-cyan-400 hover:underline flex items-center gap-1"
-                  >
-                    <span>Direct PDF Download</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                <div className="flex items-center gap-2.5 text-[11px] font-mono">
+                  <span className="text-cyan-400">Digital Govind Watermark</span>
+                  <span>·</span>
+                  <span>Progress auto-saved</span>
                 </div>
               </div>
-
             </div>
           ) : (
             /* Interactive Curated Topic Notes View */
             <div className={`rounded-3xl border ${contentBg} p-6 sm:p-10 shadow-2xl relative overflow-hidden transition-all`}>
-              
               {/* Header: Part info & Topic page */}
               <div className="flex items-center justify-between gap-4 border-b border-slate-800/80 pb-4 mb-6 text-xs font-mono">
                 <span className="text-amber-400 uppercase tracking-wider font-semibold">
@@ -835,7 +981,10 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
 
                 {/* Try This Prompt Interactive Snippet Block */}
                 {(curatedDetail?.tryPrompt || sampleExcerpt?.tryPromptSnippet) && (
-                  <div className="mt-8 p-5 rounded-2xl bg-slate-950/90 border border-amber-500/30 relative">
+                  <div
+                    data-allow-copy="true"
+                    className="mt-8 p-5 rounded-2xl bg-slate-950/90 border border-amber-500/30 relative"
+                  >
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-2">
                         <Sparkles className="w-3.5 h-3.5" />
@@ -879,7 +1028,6 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                     </div>
                   </div>
                 )}
-
               </div>
 
               {/* Footer Navigation Bar within Reader Content */}
@@ -906,10 +1054,8 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
-
             </div>
           )}
-
         </main>
       </div>
 
@@ -936,7 +1082,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 <h3 className="text-lg font-bold text-white tracking-tight">
                   License &amp; Device Management
                 </h3>
-                <p className="text-xs text-slate-400">Security &amp; Concurrent Sessions</p>
+                <p className="text-xs text-slate-400">Digital Govind Online-Only Protection</p>
               </div>
             </div>
 
@@ -952,8 +1098,8 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                   <span className="text-cyan-300">{license.orderId}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Status:</span>
-                  <span className="text-emerald-400 font-bold uppercase">Verified &amp; Active</span>
+                  <span className="text-slate-500">Access Mode:</span>
+                  <span className="text-emerald-400 font-bold uppercase">Online Reader Only</span>
                 </div>
               </div>
 
@@ -1030,7 +1176,6 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
           </div>
         </div>
       )}
-
     </div>
   );
 };

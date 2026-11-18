@@ -21,7 +21,7 @@ export interface CustomerLicensePayload {
   token: string;
   status: 'active' | 'revoked';
   maxDevices: number;
-  downloadUrl: string;
+  downloadUrl?: string;
   readerStreamUrl: string;
 }
 

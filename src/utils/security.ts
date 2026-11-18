@@ -65,19 +65,42 @@ export function getOrCreateDeviceId(): string {
 /**
  * Detect client OS and Browser
  */
+export type SupportedPlatform = 'Android' | 'Windows' | 'macOS' | 'iPhone' | 'iPad' | 'Linux';
+
+export function detectPlatformFamily(): SupportedPlatform {
+  if (typeof window === 'undefined') return 'Windows';
+  const ua = navigator.userAgent || '';
+  const maxTouch = typeof navigator.maxTouchPoints === 'number' ? navigator.maxTouchPoints : 0;
+
+  if (/iPad/i.test(ua) || (/Macintosh/i.test(ua) && maxTouch > 1)) {
+    return 'iPad';
+  }
+  if (/iPhone|iPod/i.test(ua)) {
+    return 'iPhone';
+  }
+  if (/Android/i.test(ua)) {
+    return 'Android';
+  }
+  if (/Macintosh|Mac OS/i.test(ua)) {
+    return 'macOS';
+  }
+  if (/Linux/i.test(ua)) {
+    return 'Linux';
+  }
+  return 'Windows';
+}
+
 export function getDeviceInfo(): { browser: string; os: string } {
   if (typeof window === 'undefined') return { browser: 'Unknown', os: 'Unknown' };
   const ua = navigator.userAgent;
   let browser = 'Chrome';
-  if (ua.includes('Firefox')) browser = 'Firefox';
+  if (ua.includes('Firefox') || ua.includes('FxiOS')) browser = 'Firefox';
+  else if (ua.includes('Edg') || ua.includes('EdgiOS') || ua.includes('EdgA')) browser = 'Edge';
+  else if (ua.includes('CriOS')) browser = 'Chrome';
   else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari';
-  else if (ua.includes('Edg')) browser = 'Edge';
 
-  let os = 'Windows';
-  if (ua.includes('Macintosh') || ua.includes('Mac OS')) os = 'macOS';
-  else if (ua.includes('Linux')) os = 'Linux';
-  else if (ua.includes('Android')) os = 'Android';
-  else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+  const platform = detectPlatformFamily();
+  const os = platform === 'iPhone' ? 'iOS' : platform === 'iPad' ? 'iPadOS' : platform;
 
   return { browser, os };
 }
@@ -357,6 +380,7 @@ export function generateWatermarkText(license: CustomerLicense): {
   primary: string;
   secondary: string;
   tokenSnippet: string;
+  canvasLabel: string;
 } {
   const dateStr = new Date(license.verifiedAt).toLocaleDateString('en-US', {
     year: 'numeric',
@@ -364,9 +388,10 @@ export function generateWatermarkText(license: CustomerLicense): {
     day: 'numeric',
   });
   return {
-    primary: `LICENSED TO: ${license.customerEmail.toUpperCase()}`,
-    secondary: `ORDER ${license.orderId} · ${dateStr} · PEH SECURE READER`,
+    primary: `DIGITAL GOVIND · ${license.customerEmail.toLowerCase()}`,
+    secondary: `LICENSED ONLINE READER · ${license.orderId} · ${dateStr}`,
     tokenSnippet: `ID: ${license.token.slice(0, 14)}...`,
+    canvasLabel: `Digital Govind · ${license.customerEmail.toLowerCase()}`,
   };
 }
 

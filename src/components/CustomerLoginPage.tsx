@@ -54,10 +54,14 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
         );
 
         if (match) {
-          const checkRes = await fetch(
-            `/api/stream-pdf?token=${encodeURIComponent(match.token)}&orderId=${encodeURIComponent(match.orderId)}`,
-            { method: 'HEAD' }
-          );
+          const checkRes = await fetch('/api/stream-pdf', {
+            method: 'HEAD',
+            headers: {
+              Authorization: `Bearer ${match.token}`,
+              'X-Order-Id': match.orderId,
+              'X-Reader-Session': 'dg-online-reader-v1',
+            },
+          });
           if (checkRes.ok) {
             createCustomerLicense(
               match.customerEmail,

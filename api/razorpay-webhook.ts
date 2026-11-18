@@ -174,8 +174,7 @@ export default async function handler(req: any, res: any) {
         token,
         status: 'active' as const,
         maxDevices: 2,
-        downloadUrl: `/api/download-ebook?token=${encodeURIComponent(token)}&orderId=${encodeURIComponent(orderId)}`,
-        readerStreamUrl: `/api/stream-pdf?token=${encodeURIComponent(token)}&orderId=${encodeURIComponent(orderId)}`,
+        readerStreamUrl: `/api/reader/stream-pdf`,
       };
 
       orderFulfillmentStore.set({

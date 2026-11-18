@@ -57,8 +57,8 @@ export const FUNNEL_CONFIG: FunnelConfig = {
   // Razorpay Payment Link connected to all purchase CTA buttons
   paymentUrl: "https://rzp.io/rzp/aGZfHfs",
 
-  // Authenticated server-side eBook download endpoint (served from private storage)
-  ebookDownloadUrl: "/api/download-ebook",
+  // Direct file downloads disabled — online-only protected reader delivery
+  ebookDownloadUrl: "",
 
   // The relative or deployed URL of your thank-you page
   thankYouUrl: "/thank-you",

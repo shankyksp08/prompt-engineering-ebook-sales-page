@@ -107,14 +107,18 @@ export const Navigation: React.FC<NavigationProps> = ({
         {/* Desktop Thank You CTA (only on /thank-you) */}
         {isThankYouPage && (
           <div className="hidden sm:flex items-center gap-3">
-            <a
-              href={FUNNEL_CONFIG.ebookDownloadUrl}
-              download
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  window.location.assign('/reader');
+                }
+              }}
               className="flex items-center gap-2 py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-xs sm:text-sm transition-all shadow-md shadow-emerald-500/20 focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer motion-cta-btn"
             >
-              <span>Download PDF</span>
+              <span>Open Reader</span>
               <ArrowRight className="w-3.5 h-3.5" />
-            </a>
+            </button>
           </div>
         )}
 

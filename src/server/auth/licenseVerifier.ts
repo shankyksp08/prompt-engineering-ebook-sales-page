@@ -14,8 +14,12 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Resolved path to private eBook storage
-export const PRIVATE_STORAGE_DIR = path.resolve(__dirname, '../../../private_storage');
+// Resolved path to private eBook storage (supports both Vercel /var/task/private_storage and local dev)
+const cwdPrivateStorage = path.resolve(process.cwd(), 'private_storage');
+const relativePrivateStorage = path.resolve(__dirname, '../../../private_storage');
+export const PRIVATE_STORAGE_DIR = fs.existsSync(cwdPrivateStorage)
+  ? cwdPrivateStorage
+  : relativePrivateStorage;
 export const OFFICIAL_EBOOK_PATH = path.join(PRIVATE_STORAGE_DIR, 'Digital-Govind-Watermarked-eBook.pdf');
 export const BACKUP_EBOOK_PATH = path.join(PRIVATE_STORAGE_DIR, 'backup', 'Prompt_Engineering_Handbook_original_backup.pdf');
 

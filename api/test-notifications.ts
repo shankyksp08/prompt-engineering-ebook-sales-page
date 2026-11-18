@@ -9,6 +9,7 @@
  * - Trigger simulated or test email/SMS dispatch with safe credentials
  */
 
+import crypto from 'node:crypto';
 import {
   generateThankYouEmailHtml,
   generateThankYouEmailText,
@@ -22,13 +23,42 @@ import {
   notificationStore,
 } from '../src/server/notifications/notificationService.ts';
 
+function isAuthorizedAdminRequest(req: any): boolean {
+  const configuredSecret =
+    process.env.ADMIN_API_SECRET?.trim() || process.env.LICENSE_SIGNING_SECRET?.trim();
+  if (!configuredSecret) return false;
+
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  const headerSecret = req.headers['x-admin-secret'];
+  const candidate =
+    typeof headerSecret === 'string'
+      ? headerSecret.trim()
+      : typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7).trim()
+        : '';
+
+  if (!candidate) return false;
+
+  const a = Buffer.from(candidate, 'utf8');
+  const b = Buffer.from(configuredSecret, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  if (!isAuthorizedAdminRequest(req)) {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Diagnostic notification endpoint requires valid admin authorization.',
+    });
+  }
+
   try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
     const {
       action = 'preview', // 'preview' | 'test-dispatch' | 'store-status'
       customerName = 'Test Learner',
@@ -36,7 +66,7 @@ export default async function handler(req: any, res: any) {
       customerPhone = '+919876543210',
       orderId = `test_ord_${Date.now()}`,
       paymentId = `test_pay_${Date.now()}`,
-    } = req.body || {};
+    } = body;
 
     if (action === 'store-status') {
       return res.status(200).json({

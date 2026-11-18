@@ -9,12 +9,24 @@ function devApiRoutesPlugin(): Plugin {
     name: 'dev-api-routes',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        if (!req.url || !req.url.startsWith('/api/')) {
+        if (!req.url) {
           return next();
         }
 
         const parsedUrl = new URL(req.url, 'http://localhost');
         const pathname = parsedUrl.pathname;
+
+        // Strictly block direct public access to private_storage in Vite dev/preview server
+        if (pathname.startsWith('/private_storage')) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'Forbidden: Private storage cannot be accessed directly.' }));
+          return;
+        }
+
+        if (!req.url.startsWith('/api/')) {
+          return next();
+        }
 
         // Enhance req/res for Vercel / Express handler compatibility
         (req as any).query = Object.fromEntries(parsedUrl.searchParams);

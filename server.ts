@@ -28,6 +28,11 @@ async function startServer() {
   );
   app.use(express.urlencoded({ extended: true }));
 
+  // Strictly block direct public access to private_storage
+  app.use('/private_storage', (_req, res) => {
+    res.status(403).json({ error: 'Forbidden: Private storage cannot be accessed directly.' });
+  });
+
   // API Route Handlers
   app.all('/api/razorpay-webhook', async (req, res) => {
     try {

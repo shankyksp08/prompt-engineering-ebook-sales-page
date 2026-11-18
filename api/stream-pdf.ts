@@ -16,9 +16,9 @@ import {
 } from '../src/server/auth/licenseVerifier.ts';
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
-    return res.status(405).json({ error: 'Method Not Allowed. Use GET to read.' });
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD');
+    return res.status(405).json({ error: 'Method Not Allowed. Use GET or HEAD.' });
   }
 
   const { token, orderId, paymentId } = req.query || {};
@@ -49,13 +49,36 @@ export default async function handler(req: any, res: any) {
 
   const stat = fs.statSync(OFFICIAL_EBOOK_PATH);
   const fileSize = stat.size;
+
+  if (req.method === 'HEAD') {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Accept-Ranges': 'bytes',
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="Digital-Govind-Watermarked-eBook.pdf"',
+      'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+    });
+    return res.end();
+  }
+
   const range = req.headers.range;
 
   if (range) {
-    // Handle byte-range request for smooth PDF pagination
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    // Handle byte-range request safely for smooth PDF pagination
+    const parts = String(range).replace(/bytes=/, '').split('-');
+    const parsedStart = parseInt(parts[0], 10);
+    const parsedEnd = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const start = Number.isFinite(parsedStart) && parsedStart >= 0 ? parsedStart : 0;
+    const end = Number.isFinite(parsedEnd) ? Math.min(parsedEnd, fileSize - 1) : fileSize - 1;
+
+    if (start >= fileSize || end < start) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${fileSize}`,
+      });
+      return res.end();
+    }
+
     const chunksize = end - start + 1;
 
     res.writeHead(206, {

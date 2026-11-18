@@ -33,6 +33,7 @@ import {
   CustomerLicense,
   getActiveLicense,
   clearActiveLicense,
+  isServerSignedLicense,
   getReadingProgress,
   toggleTopicCompletion,
   toggleTopicBookmark,
@@ -47,7 +48,15 @@ interface ReaderPageProps {
 }
 
 export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNavigateLogin }) => {
-  const [license, setLicense] = useState<CustomerLicense | null>(() => getActiveLicense());
+  const [license, setLicense] = useState<CustomerLicense | null>(() => {
+    const active = getActiveLicense();
+    return isServerSignedLicense(active) ? active : null;
+  });
+  const [isVerifyingLicense, setIsVerifyingLicense] = useState<boolean>(() => {
+    const active = getActiveLicense();
+    return isServerSignedLicense(active);
+  });
+  const [serverVerified, setServerVerified] = useState<boolean>(false);
   const [progress, setProgress] = useState(() => getReadingProgress());
   const [currentTopicId, setCurrentTopicId] = useState<number>(() => progress.lastReadTopicId || 1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -65,9 +74,52 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   const [zoomPercent, setZoomPercent] = useState<number>(100);
   const totalPages = 81;
 
-  // Sync active license
+  // Verify active license cryptographically with the server before unlocking reader UI
   useEffect(() => {
-    setLicense(getActiveLicense());
+    const active = getActiveLicense();
+    if (!isServerSignedLicense(active)) {
+      if (active) {
+        clearActiveLicense();
+      }
+      setLicense(null);
+      setServerVerified(false);
+      setIsVerifyingLicense(false);
+      return;
+    }
+
+    setLicense(active);
+    let cancelled = false;
+    setIsVerifyingLicense(true);
+
+    const params = new URLSearchParams({
+      token: active.token,
+      orderId: active.orderId,
+    });
+
+    fetch(`/api/stream-pdf?${params.toString()}`, { method: 'HEAD' })
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) {
+          setServerVerified(true);
+        } else {
+          clearActiveLicense();
+          setLicense(null);
+          setServerVerified(false);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setServerVerified(false);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsVerifyingLicense(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Update last read topic in progress
@@ -203,8 +255,23 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   // Overall reading progress calculation
   const progressPercent = Math.round((progress.completedTopicIds.length / allTopics.length) * 100);
 
-  // If unauthenticated or license revoked
-  if (!license) {
+  // Show verification spinner while checking server license signature
+  if (isVerifyingLicense) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 font-sans">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center shadow-2xl space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center mx-auto animate-pulse">
+            <Shield className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-bold text-white">Verifying License Access...</h2>
+          <p className="text-xs text-slate-400">Validating your cryptographic eBook license with the server.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If unauthenticated, unverified, or license revoked
+  if (!license || !serverVerified) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
         <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md p-4">

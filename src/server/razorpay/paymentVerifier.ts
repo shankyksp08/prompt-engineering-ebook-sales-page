@@ -288,6 +288,9 @@ export async function fetchRazorpayPaymentLink(
 export async function verifyRazorpayPaymentServerSide(params: {
   paymentId: string;
   paymentLinkId?: string;
+  paymentLinkReferenceId?: string;
+  paymentLinkStatus?: string;
+  razorpayOrderId?: string;
   signature?: string;
   expectedAmountPaise?: number; // default: 9900 (₹99)
   expectedCurrency?: string; // default: 'INR'
@@ -298,6 +301,9 @@ export async function verifyRazorpayPaymentServerSide(params: {
   const {
     paymentId,
     paymentLinkId,
+    paymentLinkReferenceId,
+    paymentLinkStatus,
+    razorpayOrderId,
     signature,
     expectedAmountPaise = 9900,
     expectedCurrency = 'INR',
@@ -402,7 +408,17 @@ export async function verifyRazorpayPaymentServerSide(params: {
 
   if (targetPaymentLinkId) {
     const linkRes = await fetchRazorpayPaymentLink(targetPaymentLinkId);
-    if (linkRes.success && linkRes.data) {
+    if (!linkRes.success || !linkRes.data) {
+      if (paymentLinkId || targetPaymentLinkId.startsWith('plink_')) {
+        return {
+          verified: false,
+          httpStatus: linkRes.status || 400,
+          error: linkRes.error || 'PAYMENT_LINK_LOOKUP_FAILED',
+          message: linkRes.message || `Payment Link '${targetPaymentLinkId}' could not be verified on Razorpay.`,
+          payment,
+        };
+      }
+    } else {
       verifiedPaymentLink = linkRes.data;
 
       // Check payment link status is 'paid'
@@ -429,8 +445,13 @@ export async function verifyRazorpayPaymentServerSide(params: {
         };
       }
 
-      // Check short URL matches official short URL (contains aGZfHfs or matches configured)
-      if (verifiedPaymentLink.short_url) {
+      // Check short URL matches official short URL only for Payment Link entities (not underlying inv_ invoices whose short_url is /i/...)
+      const isPaymentLinkEntity =
+        verifiedPaymentLink.entity === 'payment_link' ||
+        targetPaymentLinkId.startsWith('plink_') ||
+        Boolean(verifiedPaymentLink.short_url && verifiedPaymentLink.short_url.includes('/rzp/'));
+
+      if (verifiedPaymentLink.short_url && isPaymentLinkEntity) {
         const expectedCode = expectedShortUrl.split('/').pop() || 'aGZfHfs';
         const matchesShortUrl =
           verifiedPaymentLink.short_url.includes(expectedCode) ||
@@ -466,18 +487,27 @@ export async function verifyRazorpayPaymentServerSide(params: {
     }
   }
 
-  // 8. Cryptographic Signature check (if signature provided)
+  // 8. Cryptographic Signature check (if signature provided in callback)
   if (signature) {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     const { keySecret } = getRazorpayCredentials();
-    const secretsToTry = [webhookSecret, keySecret].filter(Boolean) as string[];
+    const secretsToTry = [keySecret, webhookSecret].filter(Boolean) as string[];
 
     if (secretsToTry.length > 0) {
-      const payloadCandidate1 = `${targetPaymentLinkId || ''}|${cleanPaymentId}`;
-      let signatureMatched = false;
+      const refId = paymentLinkReferenceId ?? verifiedPaymentLink?.reference_id ?? '';
+      const linkStatus = paymentLinkStatus || verifiedPaymentLink?.status || 'paid';
+      const payloadCandidates = [
+        // Official Razorpay Payment Link callback signature format
+        `${targetPaymentLinkId || ''}|${refId}|${linkStatus}|${cleanPaymentId}`,
+        // Standard Checkout order signature format
+        `${razorpayOrderId || payment.order_id || ''}|${cleanPaymentId}`,
+        // Short fallback format
+        `${targetPaymentLinkId || ''}|${cleanPaymentId}`,
+      ].filter((candidate) => candidate.replace(/\|/g, '') !== '');
 
+      let signatureMatched = false;
       for (const sec of secretsToTry) {
-        if (verifyRazorpayWebhookSignature(payloadCandidate1, signature, sec)) {
+        if (payloadCandidates.some((cand) => verifyRazorpayWebhookSignature(cand, signature, sec))) {
           signatureMatched = true;
           break;
         }
@@ -485,18 +515,28 @@ export async function verifyRazorpayPaymentServerSide(params: {
 
       if (!signatureMatched) {
         console.warn(`[PaymentVerifier] Signature provided for payment '${cleanPaymentId}' failed verification.`);
+        return {
+          verified: false,
+          httpStatus: 400,
+          error: 'INVALID_SIGNATURE',
+          message: 'Razorpay callback signature verification failed.',
+          payment,
+        };
       }
     }
   }
 
-  // 9. Extract authoritative customer details from verified Razorpay records
-  const customerEmail =
-    payment.email ||
-    verifiedPaymentLink?.customer?.email ||
-    payment.notes?.email ||
-    (customerEmailFallback && customerEmailFallback.includes('@') ? customerEmailFallback : '');
+  // 9. Extract authoritative customer details from verified Razorpay records (ignoring void@razorpay.com placeholder)
+  const emailCandidates = [
+    payment.email,
+    verifiedPaymentLink?.customer?.email,
+    payment.notes?.email,
+    payment.notes?.customer_email,
+    customerEmailFallback,
+  ];
+  const customerEmail = emailCandidates.find((candidate) => isRealCustomerEmail(candidate)) || '';
 
-  if (!customerEmail || !customerEmail.includes('@')) {
+  if (!customerEmail) {
     return {
       verified: false,
       httpStatus: 400,
@@ -520,7 +560,7 @@ export async function verifyRazorpayPaymentServerSide(params: {
     'Valued Reader';
 
   const orderId =
-    targetPaymentLinkId ||
+    (targetPaymentLinkId && targetPaymentLinkId.startsWith('plink_') ? targetPaymentLinkId : undefined) ||
     payment.order_id ||
     payment.invoice_id ||
     `ORD-${cleanPaymentId.replace(/^pay_/, '').toUpperCase()}`;
@@ -534,6 +574,418 @@ export async function verifyRazorpayPaymentServerSide(params: {
     customerEmail: customerEmail.toLowerCase().trim(),
     customerPhone: customerPhone.trim(),
     customerName: customerName.trim(),
+  };
+}
+
+/**
+ * Checks whether an email value is a real customer email (ignores Razorpay's void@razorpay.com placeholder)
+ */
+export function isRealCustomerEmail(email?: string | null): boolean {
+  if (!email || typeof email !== 'string') return false;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized.includes('@')) return false;
+  if (normalized === 'void@razorpay.com') return false;
+  return true;
+}
+
+/**
+ * Extracts all candidate real emails stored on a Razorpay payment entity
+ */
+function extractPaymentEmails(payment: RazorpayPaymentEntity): string[] {
+  const raw = [
+    payment.email,
+    payment.notes?.email,
+    payment.notes?.customer_email,
+    payment.notes?.buyer_email,
+  ];
+  return raw
+    .filter((v): v is string => isRealCustomerEmail(v))
+    .map((v) => v.trim().toLowerCase());
+}
+
+/**
+ * Fetch a page of payments from Razorpay API (GET /v1/payments)
+ */
+export async function fetchRazorpayPaymentsPage(params: {
+  count?: number;
+  skip?: number;
+} = {}): Promise<{
+  success: boolean;
+  items?: RazorpayPaymentEntity[];
+  status?: number;
+  error?: string;
+  message?: string;
+}> {
+  const count = Math.min(Math.max(params.count ?? 100, 1), 100);
+  const skip = Math.max(params.skip ?? 0, 0);
+
+  if (mockPayments.size > 0) {
+    const all = Array.from(mockPayments.values()).reverse();
+    return {
+      success: true,
+      items: all.slice(skip, skip + count),
+      status: 200,
+    };
+  }
+
+  const { keyId, keySecret, isConfigured } = getRazorpayCredentials();
+  if (!isConfigured) {
+    return {
+      success: false,
+      status: 500,
+      error: 'CREDENTIALS_MISSING',
+      message: 'Razorpay API credentials (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET) are not configured on the server.',
+    };
+  }
+
+  try {
+    const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+    const url = `https://api.razorpay.com/v1/payments?count=${count}&skip=${skip}`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const json = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      return {
+        success: false,
+        status: 500,
+        error: 'AUTH_FAILED',
+        message: 'Invalid Razorpay API credentials.',
+      };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        error: json.error?.code || 'RAZORPAY_API_ERROR',
+        message: json.error?.description || `Razorpay API error (HTTP ${response.status})`,
+      };
+    }
+
+    const items = Array.isArray(json.items) ? (json.items as RazorpayPaymentEntity[]) : [];
+    return { success: true, items, status: 200 };
+  } catch (err: any) {
+    return {
+      success: false,
+      status: 500,
+      error: 'NETWORK_ERROR',
+      message: `Failed to query Razorpay Payments API: ${err.message}`,
+    };
+  }
+}
+
+/**
+ * Fetch payments associated with a Razorpay Order ID (GET /v1/orders/:orderId/payments)
+ */
+export async function fetchRazorpayOrderPayments(razorpayOrderId: string): Promise<{
+  success: boolean;
+  items?: RazorpayPaymentEntity[];
+  status?: number;
+  error?: string;
+  message?: string;
+}> {
+  const cleanOrderId = (razorpayOrderId || '').trim();
+  if (!cleanOrderId) {
+    return { success: false, status: 400, error: 'MISSING_ORDER_ID', message: 'Order ID is required.' };
+  }
+
+  if (mockPayments.size > 0) {
+    const matched = Array.from(mockPayments.values()).filter((p) => p.order_id === cleanOrderId);
+    return { success: true, items: matched, status: 200 };
+  }
+
+  const { keyId, keySecret, isConfigured } = getRazorpayCredentials();
+  if (!isConfigured) {
+    return {
+      success: false,
+      status: 500,
+      error: 'CREDENTIALS_MISSING',
+      message: 'Razorpay API credentials (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET) are not configured on the server.',
+    };
+  }
+
+  try {
+    const authHeader = 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+    const url = `https://api.razorpay.com/v1/orders/${encodeURIComponent(cleanOrderId)}/payments`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json',
+      },
+    });
+    const json = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      return { success: false, status: 500, error: 'AUTH_FAILED', message: 'Invalid Razorpay API credentials.' };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status === 400 ? 404 : response.status,
+        error: json.error?.code || 'ORDER_LOOKUP_FAILED',
+        message: json.error?.description || `Order '${cleanOrderId}' not found on Razorpay.`,
+      };
+    }
+
+    const items = Array.isArray(json.items) ? (json.items as RazorpayPaymentEntity[]) : [];
+    return { success: true, items, status: 200 };
+  } catch (err: any) {
+    return {
+      success: false,
+      status: 500,
+      error: 'NETWORK_ERROR',
+      message: `Failed to query Razorpay Order Payments API: ${err.message}`,
+    };
+  }
+}
+
+/**
+ * Find and verify a real captured ₹99 INR payment on Razorpay matching a customer email.
+ * Never creates fake records or bypasses capture/amount/currency/refund checks.
+ */
+export async function findVerifiedPaymentByEmailServerSide(params: {
+  email: string;
+  expectedAmountPaise?: number;
+  expectedCurrency?: string;
+  expectedShortUrl?: string;
+  maxPagesToScan?: number;
+}): Promise<ServerSidePaymentVerificationResult> {
+  const cleanEmail = (params.email || '').trim().toLowerCase();
+  if (!isRealCustomerEmail(cleanEmail)) {
+    return {
+      verified: false,
+      httpStatus: 400,
+      error: 'INVALID_EMAIL',
+      message: 'A valid customer email address is required.',
+    };
+  }
+
+  const expectedAmountPaise = params.expectedAmountPaise ?? 9900;
+  const expectedCurrency = (params.expectedCurrency ?? 'INR').toUpperCase();
+  const expectedShortUrl = params.expectedShortUrl ?? 'https://rzp.io/rzp/aGZfHfs';
+  const maxPages = params.maxPagesToScan ?? 5;
+  const pageSize = 100;
+
+  for (let page = 0; page < maxPages; page++) {
+    const pageRes = await fetchRazorpayPaymentsPage({ count: pageSize, skip: page * pageSize });
+    if (!pageRes.success) {
+      return {
+        verified: false,
+        httpStatus: pageRes.status || 500,
+        error: pageRes.error || 'RAZORPAY_LOOKUP_FAILED',
+        message: pageRes.message || 'Unable to query Razorpay payments.',
+      };
+    }
+
+    const items = pageRes.items || [];
+    for (const payment of items) {
+      const isCaptured =
+        payment.status === 'captured' && (payment.captured === true || payment.captured === undefined);
+      const isNotRefunded = !payment.amount_refunded || payment.amount_refunded === 0;
+      const matchesAmountAndCurrency =
+        payment.amount === expectedAmountPaise &&
+        (payment.currency || '').toUpperCase() === expectedCurrency;
+
+      if (!isCaptured || !isNotRefunded || !matchesAmountAndCurrency) {
+        continue;
+      }
+
+      const emailsOnPayment = extractPaymentEmails(payment);
+      let emailMatched = emailsOnPayment.includes(cleanEmail);
+
+      // If email is not directly on payment, check linked Payment Link customer record when invoice_id starts with plink_
+      if (!emailMatched && payment.invoice_id && payment.invoice_id.startsWith('plink_')) {
+        const linkRes = await fetchRazorpayPaymentLink(payment.invoice_id);
+        if (linkRes.success && linkRes.data?.customer?.email) {
+          emailMatched = linkRes.data.customer.email.trim().toLowerCase() === cleanEmail;
+        }
+      }
+
+      if (!emailMatched) {
+        continue;
+      }
+
+      const verified = await verifyRazorpayPaymentServerSide({
+        paymentId: payment.id,
+        paymentLinkId: payment.invoice_id?.startsWith('plink_') ? payment.invoice_id : undefined,
+        expectedAmountPaise,
+        expectedCurrency,
+        expectedShortUrl,
+      });
+
+      if (verified.verified) {
+        return verified;
+      }
+    }
+
+    if (items.length < pageSize) {
+      break;
+    }
+  }
+
+  return {
+    verified: false,
+    httpStatus: 404,
+    error: 'PAYMENT_NOT_FOUND_FOR_EMAIL',
+    message: 'No captured ₹99 Razorpay payment was found for this email address. If you paid via UPI without entering your email at checkout, please also enter your Razorpay Payment ID (pay_...).',
+  };
+}
+
+/**
+ * Find and verify a real captured ₹99 INR payment from a Razorpay Order ID (order_...),
+ * Payment Link ID (plink_...), or Handbook Order ID (ORD-...).
+ */
+export async function findVerifiedPaymentByOrderOrLinkIdServerSide(params: {
+  identifier: string;
+  customerEmailFallback?: string;
+  expectedAmountPaise?: number;
+  expectedCurrency?: string;
+  expectedShortUrl?: string;
+}): Promise<ServerSidePaymentVerificationResult> {
+  const cleanId = (params.identifier || '').trim();
+  const expectedAmountPaise = params.expectedAmountPaise ?? 9900;
+  const expectedCurrency = (params.expectedCurrency ?? 'INR').toUpperCase();
+  const expectedShortUrl = params.expectedShortUrl ?? 'https://rzp.io/rzp/aGZfHfs';
+
+  if (!cleanId) {
+    return {
+      verified: false,
+      httpStatus: 400,
+      error: 'MISSING_ORDER_ID',
+      message: 'A valid Razorpay Order ID, Payment Link ID, or Payment ID is required.',
+    };
+  }
+
+  // 1. Direct pay_ ID
+  if (cleanId.startsWith('pay_')) {
+    return verifyRazorpayPaymentServerSide({
+      paymentId: cleanId,
+      expectedAmountPaise,
+      expectedCurrency,
+      expectedShortUrl,
+      customerEmailFallback: params.customerEmailFallback,
+    });
+  }
+
+  // 2. Razorpay Order ID (order_...)
+  if (cleanId.startsWith('order_')) {
+    const orderRes = await fetchRazorpayOrderPayments(cleanId);
+    if (!orderRes.success) {
+      return {
+        verified: false,
+        httpStatus: orderRes.status || 404,
+        error: orderRes.error || 'ORDER_LOOKUP_FAILED',
+        message: orderRes.message || `Order '${cleanId}' could not be retrieved from Razorpay.`,
+      };
+    }
+    const items = orderRes.items || [];
+    const captured =
+      items.find(
+        (p) =>
+          p.status === 'captured' &&
+          p.amount === expectedAmountPaise &&
+          (p.currency || '').toUpperCase() === expectedCurrency &&
+          (!p.amount_refunded || p.amount_refunded === 0)
+      ) || items[0];
+
+    if (!captured) {
+      return {
+        verified: false,
+        httpStatus: 404,
+        error: 'NO_PAYMENT_FOR_ORDER',
+        message: `No captured payment found for Razorpay Order '${cleanId}'.`,
+      };
+    }
+
+    return verifyRazorpayPaymentServerSide({
+      paymentId: captured.id,
+      expectedAmountPaise,
+      expectedCurrency,
+      expectedShortUrl,
+      customerEmailFallback: params.customerEmailFallback,
+    });
+  }
+
+  // 3. Razorpay Payment Link ID (plink_...)
+  if (cleanId.startsWith('plink_')) {
+    const linkRes = await fetchRazorpayPaymentLink(cleanId);
+    if (!linkRes.success || !linkRes.data) {
+      return {
+        verified: false,
+        httpStatus: linkRes.status || 404,
+        error: linkRes.error || 'PAYMENT_LINK_LOOKUP_FAILED',
+        message: linkRes.message || `Payment Link '${cleanId}' was not found on Razorpay.`,
+      };
+    }
+
+    const paidEntry =
+      linkRes.data.payments?.find((p) => p.status === 'captured') || linkRes.data.payments?.[0];
+    if (paidEntry?.payment_id) {
+      return verifyRazorpayPaymentServerSide({
+        paymentId: paidEntry.payment_id,
+        paymentLinkId: cleanId,
+        expectedAmountPaise,
+        expectedCurrency,
+        expectedShortUrl,
+        customerEmailFallback: params.customerEmailFallback,
+      });
+    }
+
+    if (linkRes.data.order_id) {
+      return findVerifiedPaymentByOrderOrLinkIdServerSide({
+        identifier: linkRes.data.order_id,
+        customerEmailFallback: params.customerEmailFallback,
+        expectedAmountPaise,
+        expectedCurrency,
+        expectedShortUrl,
+      });
+    }
+
+    return {
+      verified: false,
+      httpStatus: 400,
+      error: 'PAYMENT_LINK_NOT_PAID',
+      message: `No captured payment found on Payment Link '${cleanId}'.`,
+    };
+  }
+
+  // 4. Generated Handbook Order ID (ORD-...) -> scan recent Razorpay payments matching pay_<suffix>
+  if (cleanId.toUpperCase().startsWith('ORD-')) {
+    const suffixLower = cleanId.slice(4).toLowerCase();
+    const pageRes = await fetchRazorpayPaymentsPage({ count: 100, skip: 0 });
+    if (!pageRes.success) {
+      return {
+        verified: false,
+        httpStatus: pageRes.status || 500,
+        error: pageRes.error || 'RAZORPAY_LOOKUP_FAILED',
+        message: pageRes.message || 'Unable to query Razorpay payments.',
+      };
+    }
+
+    const matched = (pageRes.items || []).find(
+      (p) => p.id.replace(/^pay_/, '').toLowerCase() === suffixLower || p.order_id === cleanId
+    );
+    if (matched) {
+      return verifyRazorpayPaymentServerSide({
+        paymentId: matched.id,
+        expectedAmountPaise,
+        expectedCurrency,
+        expectedShortUrl,
+        customerEmailFallback: params.customerEmailFallback,
+      });
+    }
+  }
+
+  return {
+    verified: false,
+    httpStatus: 404,
+    error: 'ORDER_NOT_FOUND',
+    message: `No verified Razorpay transaction found for '${cleanId}'. Please check your Payment ID (pay_...) or Order ID (order_...).`,
   };
 }
 
@@ -607,19 +1059,30 @@ export function extractAndValidateWebhookEvent(
   }
 
   // Extract payment details
-  const paymentId = paymentEntity?.id || `pay_${Date.now()}`;
+  const paymentId = paymentEntity?.id;
+  if (!paymentId || typeof paymentId !== 'string') {
+    return {
+      isValid: false,
+      error: 'Payment ID missing from webhook payload',
+    };
+  }
+
   const orderId =
     paymentLinkEntity?.id ||
     orderEntity?.id ||
     paymentEntity?.order_id ||
     `ord_${paymentId}`;
 
-  // Extract customer information
+  // Extract customer information (ignore Razorpay void@razorpay.com placeholder)
+  const webhookEmailCandidates = [
+    paymentEntity?.email,
+    paymentLinkEntity?.customer?.email,
+    paymentEntity?.notes?.email,
+    paymentEntity?.notes?.customer_email,
+    paymentEntity?.notes?.buyer_email,
+  ];
   const customerEmail =
-    paymentEntity?.email ||
-    paymentLinkEntity?.customer?.email ||
-    paymentEntity?.notes?.email ||
-    '';
+    webhookEmailCandidates.find((candidate) => isRealCustomerEmail(candidate))?.trim().toLowerCase() || '';
 
   const customerPhone =
     paymentEntity?.contact ||
@@ -637,6 +1100,20 @@ export function extractAndValidateWebhookEvent(
   const status = paymentEntity?.status || paymentLinkEntity?.status || 'paid';
   const method = paymentEntity?.method;
 
+  if (paymentEntity?.status && paymentEntity.status !== 'captured') {
+    return {
+      isValid: false,
+      error: `Payment status is '${paymentEntity.status}', expected 'captured'`,
+    };
+  }
+
+  if (currency.toUpperCase() !== 'INR') {
+    return {
+      isValid: false,
+      error: `Currency mismatch: Received '${currency}', expected 'INR'`,
+    };
+  }
+
   if (strictAmountCheck && amount !== expectedAmountPaise) {
     return {
       isValid: false,
@@ -644,7 +1121,7 @@ export function extractAndValidateWebhookEvent(
     };
   }
 
-  if (!customerEmail || !customerEmail.includes('@')) {
+  if (!isRealCustomerEmail(customerEmail)) {
     return {
       isValid: false,
       error: 'Customer email not found in payment payload',

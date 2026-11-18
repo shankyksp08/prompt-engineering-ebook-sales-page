@@ -20,32 +20,50 @@ import {
 import { generateLicenseToken } from '../src/server/auth/licenseVerifier.ts';
 import { orderFulfillmentStore } from '../src/server/razorpay/orderStore.ts';
 
-// Helper to extract raw body buffer from various request representations
+// Preserve raw request stream on Vercel so Razorpay HMAC-SHA256 signature verification matches exact bytes
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// Helper to extract exact raw body string from various request representations
 async function getRawBody(req: any): Promise<string> {
-  if (typeof req.body === 'string') {
-    return req.body;
-  }
   if (req.rawBody && typeof req.rawBody === 'string') {
     return req.rawBody;
+  }
+  if (Buffer.isBuffer(req.rawBody)) {
+    return req.rawBody.toString('utf8');
   }
   if (Buffer.isBuffer(req.body)) {
     return req.body.toString('utf8');
   }
+  if (typeof req.body === 'string') {
+    return req.body;
+  }
+
+  // Stream reader for standard Node / Vercel bodyParser:false requests
+  if (req.readable !== false && typeof req.on === 'function') {
+    const chunks: Buffer[] = [];
+    const rawFromStream = await new Promise<string>((resolve, reject) => {
+      req.on('data', (chunk: any) => {
+        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk);
+      });
+      req.on('end', () => {
+        resolve(Buffer.concat(chunks).toString('utf8'));
+      });
+      req.on('error', (err: any) => reject(err));
+    });
+    if (rawFromStream) {
+      return rawFromStream;
+    }
+  }
+
   if (req.body && typeof req.body === 'object') {
     return JSON.stringify(req.body);
   }
 
-  // Stream reader for standard Node / Express req
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk: any) => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      resolve(data);
-    });
-    req.on('error', (err: any) => reject(err));
-  });
+  return '';
 }
 
 export default async function handler(req: any, res: any) {
@@ -58,25 +76,31 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const rawBody = await getRawBody(req);
-    const signature = req.headers['x-razorpay-signature'] || req.headers['X-Razorpay-Signature'];
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET?.trim();
+    if (!webhookSecret) {
+      console.error('[Webhook] RAZORPAY_WEBHOOK_SECRET is not configured. Rejecting unverified webhook.');
+      return res.status(500).json({
+        error: 'Webhook verification secret is not configured on the server.',
+      });
+    }
 
-    // Verify signature if secret is configured
-    if (webhookSecret && webhookSecret.trim() !== '') {
-      const isValidSig = verifyRazorpayWebhookSignature(rawBody, signature, webhookSecret);
-      if (!isValidSig) {
-        console.warn('[Webhook] Invalid Razorpay signature received.');
-        return res.status(401).json({
-          error: 'Invalid signature verification failed',
-        });
-      }
-    } else {
-      console.warn('[Webhook] RAZORPAY_WEBHOOK_SECRET not configured. Running in unverified development mode.');
+    const rawBody = await getRawBody(req);
+    const signatureHeader = req.headers['x-razorpay-signature'] || req.headers['X-Razorpay-Signature'];
+    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+
+    const isValidSig = verifyRazorpayWebhookSignature(rawBody, signature, webhookSecret);
+    if (!isValidSig) {
+      console.warn('[Webhook] Invalid or missing Razorpay signature received.');
+      return res.status(401).json({
+        error: 'Invalid signature verification failed',
+      });
     }
 
     const payload = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
-    const validated = extractAndValidateWebhookEvent(payload);
+    const validated = extractAndValidateWebhookEvent(payload, {
+      expectedAmountPaise: 9900,
+      strictAmountCheck: true,
+    });
 
     if (!validated.isValid || !validated.details) {
       console.log(`[Webhook] Ignored event or invalid payload: ${validated.error}`);

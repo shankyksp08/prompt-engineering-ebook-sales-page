@@ -79,6 +79,18 @@ class OrderFulfillmentStore {
     return undefined;
   }
 
+  public getByEmail(customerEmail: string): OrderRecord | undefined {
+    if (!customerEmail) return undefined;
+    const target = customerEmail.trim().toLowerCase();
+    // Return most recent matching record
+    const all = Array.from(this.ordersByPaymentId.values()).reverse();
+    return all.find(
+      (record) =>
+        record.customerEmail.trim().toLowerCase() === target &&
+        record.status === 'fulfilled'
+    );
+  }
+
   public set(order: OrderRecord): void {
     const pId = order.paymentId.trim();
     const oId = order.orderId.trim();

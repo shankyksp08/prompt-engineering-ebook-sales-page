@@ -5,6 +5,7 @@ import {
   createCustomerLicense,
   getRegisteredLicenses,
   getActiveLicense,
+  isServerSignedLicense,
 } from '../utils/security.ts';
 
 interface CustomerLoginPageProps {
@@ -22,7 +23,8 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const existingLicense = getActiveLicense();
+  const rawExisting = getActiveLicense();
+  const existingLicense = isServerSignedLicense(rawExisting) ? rawExisting : null;
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,6 +32,7 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
     setSuccessMessage(null);
 
     const cleanEmail = email.trim().toLowerCase();
+    const cleanId = orderOrPaymentId.trim();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       setErrorMessage('Please enter a valid customer email address.');
       return;
@@ -39,49 +42,31 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
 
     const checkAccess = async () => {
       try {
-        // 1. Check existing verified licenses in local storage registry
+        // 1. Check existing server-signed licenses in local storage registry
         const registry = getRegisteredLicenses();
         const match = registry.find(
           (l) =>
-            l.customerEmail.toLowerCase() === cleanEmail && l.status === 'active' ||
-            (orderOrPaymentId &&
-              (l.orderId.toLowerCase() === orderOrPaymentId.trim().toLowerCase() ||
-                l.paymentId.toLowerCase() === orderOrPaymentId.trim().toLowerCase()))
+            isServerSignedLicense(l) &&
+            l.customerEmail.toLowerCase() === cleanEmail &&
+            (!cleanId ||
+              l.orderId.toLowerCase() === cleanId.toLowerCase() ||
+              l.paymentId.toLowerCase() === cleanId.toLowerCase())
         );
 
         if (match) {
-          // Existing customer retains access
-          createCustomerLicense(match.customerEmail, match.paymentId, match.customerName);
-          setSuccessMessage('Verified purchase confirmed! Opening eBook reader...');
-          setTimeout(() => {
-            onLoginSuccess();
-          }, 800);
-          return;
-        }
-
-        // 2. If Order/Payment ID provided, verify against server API
-        if (orderOrPaymentId) {
-          const res = await fetch('/api/verify-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              paymentId: orderOrPaymentId.trim(),
-              paymentLinkId: orderOrPaymentId.trim(),
-              status: 'paid',
-              email: cleanEmail,
-            }),
-          });
-
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.verified && data.license) {
+          const checkRes = await fetch(
+            `/api/stream-pdf?token=${encodeURIComponent(match.token)}&orderId=${encodeURIComponent(match.orderId)}`,
+            { method: 'HEAD' }
+          );
+          if (checkRes.ok) {
             createCustomerLicense(
-              cleanEmail,
-              orderOrPaymentId.trim(),
-              data.license.customerName || 'Verified Reader',
-              data.license.token,
-              data.license.orderId
+              match.customerEmail,
+              match.paymentId,
+              match.customerName,
+              match.token,
+              match.orderId
             );
-            setSuccessMessage('Payment verified! Access unlocked...');
+            setSuccessMessage('Verified purchase confirmed! Opening eBook reader...');
             setTimeout(() => {
               onLoginSuccess();
             }, 800);
@@ -89,11 +74,65 @@ export const CustomerLoginPage: React.FC<CustomerLoginPageProps> = ({
           }
         }
 
-        // 3. Unpaid or unverified customer access rejected
+        // 2. Verify directly against server API (supports email-only, pay_..., order_..., plink_..., or ORD-...)
+        const payload: Record<string, string> = { email: cleanEmail };
+        if (cleanId) {
+          if (cleanId.startsWith('pay_')) {
+            payload.paymentId = cleanId;
+          } else if (cleanId.startsWith('plink_')) {
+            payload.paymentLinkId = cleanId;
+          } else {
+            payload.orderId = cleanId;
+          }
+        }
+
+        const res = await fetch('/api/verify-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        const verifiedToken = data?.license?.token;
+        const verifiedEmail = (data?.license?.customerEmail || data?.customerEmail || '')
+          .toLowerCase()
+          .trim();
+
+        if (
+          res.ok &&
+          data.verified &&
+          data.license &&
+          typeof verifiedToken === 'string' &&
+          verifiedToken.includes('.') &&
+          !verifiedToken.startsWith('LIC-') &&
+          (!verifiedEmail || verifiedEmail === cleanEmail)
+        ) {
+          createCustomerLicense(
+            verifiedEmail || cleanEmail,
+            data.license.paymentId || cleanId,
+            data.license.customerName || 'Verified Reader',
+            verifiedToken,
+            data.license.orderId
+          );
+          setSuccessMessage('Payment verified! Access unlocked...');
+          setTimeout(() => {
+            onLoginSuccess();
+          }, 800);
+          return;
+        }
+
+        if (verifiedEmail && verifiedEmail !== cleanEmail) {
+          setErrorMessage('The email entered does not match the customer email on this Razorpay order.');
+          return;
+        }
+
+        // 3. Surface server verification explanation or reject unverified customer access
         setErrorMessage(
-          'No verified purchase found for this email address. Please provide your Razorpay Payment ID or purchase the handbook from the sales page.'
+          typeof data?.message === 'string' && data.message.trim() !== ''
+            ? data.message
+            : 'No verified purchase found for this email address. Please enter your Razorpay Payment ID (pay_...) or purchase the handbook from the sales page.'
         );
-      } catch (err: any) {
+      } catch {
         setErrorMessage('Verification failed. Please check your network and try again.');
       } finally {
         setLoading(false);

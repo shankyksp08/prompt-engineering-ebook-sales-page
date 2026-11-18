@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, BookOpen, ArrowRight } from 'lucide-react';
+import { Menu, X, BookOpen, ArrowRight, UserRound } from 'lucide-react';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
 
 interface NavigationProps {
   onBuyClick: () => void;
   onPreviewClick: () => void;
+  onLoginClick?: () => void;
   isThankYouPage?: boolean;
   onNavigateHome?: () => void;
 }
@@ -12,6 +13,7 @@ interface NavigationProps {
 export const Navigation: React.FC<NavigationProps> = ({
   onBuyClick,
   onPreviewClick,
+  onLoginClick,
   isThankYouPage = false,
   onNavigateHome,
 }) => {
@@ -42,21 +44,21 @@ export const Navigation: React.FC<NavigationProps> = ({
           : 'bg-transparent py-4 sm:py-5'
       }`}
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3">
         {/* Brand Mark */}
         {isThankYouPage ? (
           <button
             onClick={onNavigateHome}
-            className="flex items-center gap-2.5 text-left group focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1"
+            className="flex items-center gap-2.5 text-left group focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1 min-w-0"
           >
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 border border-amber-500/80 text-amber-400 font-mono text-sm font-bold shadow-inner group-hover:border-amber-400 transition-colors">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 border border-amber-500/80 text-amber-400 font-mono text-sm font-bold shadow-inner group-hover:border-amber-400 transition-colors shrink-0">
               &gt;_
             </div>
-            <div>
-              <span className="font-bold text-white text-sm sm:text-base tracking-tight block">
+            <div className="min-w-0">
+              <span className="font-bold text-white text-sm sm:text-base tracking-tight block truncate">
                 {FUNNEL_CONFIG.productTitle}
               </span>
-              <span className="text-[10px] text-slate-400 block -mt-0.5">
+              <span className="text-[10px] text-slate-400 block -mt-0.5 truncate">
                 ← Return to Sales Page
               </span>
             </div>
@@ -64,16 +66,16 @@ export const Navigation: React.FC<NavigationProps> = ({
         ) : (
           <a
             href="#"
-            className="flex items-center gap-2.5 text-left group focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1"
+            className="flex items-center gap-2.5 text-left group focus:outline-none focus:ring-2 focus:ring-cyan-500 rounded-lg p-1 min-w-0"
           >
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 border border-amber-500/80 text-amber-400 font-mono text-sm font-bold shadow-inner group-hover:border-amber-400 transition-colors">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 border border-amber-500/80 text-amber-400 font-mono text-sm font-bold shadow-inner group-hover:border-amber-400 transition-colors shrink-0">
               &gt;_
             </div>
-            <div>
-              <span className="font-bold text-white text-sm sm:text-base tracking-tight block">
+            <div className="min-w-0">
+              <span className="font-bold text-white text-sm sm:text-base tracking-tight block truncate">
                 {FUNNEL_CONFIG.productTitle}
               </span>
-              <span className="text-[10px] text-amber-400/90 font-mono block -mt-0.5">
+              <span className="text-[10px] text-amber-400/90 font-mono block -mt-0.5 truncate">
                 {FUNNEL_CONFIG.edition} · {FUNNEL_CONFIG.releaseDate}
               </span>
             </div>
@@ -116,13 +118,30 @@ export const Navigation: React.FC<NavigationProps> = ({
           </div>
         )}
 
-        {/* Mobile Hamburger Toggle */}
+        {/* Top-Right Header Actions: Login Button + Mobile Hamburger Toggle */}
         {!isThankYouPage && (
-          <div className="lg:hidden flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                if (onLoginClick) {
+                  onLoginClick();
+                } else if (typeof window !== 'undefined') {
+                  window.location.assign('/login');
+                }
+              }}
+              className="motion-cta-btn flex items-center justify-center gap-1.5 py-2 px-3.5 sm:py-2.5 sm:px-4 rounded-xl bg-gradient-to-r from-cyan-400 via-cyan-500 to-blue-600 hover:from-cyan-300 hover:to-blue-500 text-[#FFFFFF] font-extrabold text-xs sm:text-sm shadow-xl shadow-cyan-500/25 focus:outline-none focus:ring-2 focus:ring-cyan-300 cursor-pointer whitespace-nowrap"
+            >
+              <span className="pointer-events-none absolute inset-0 w-1/3 bg-gradient-to-r from-transparent via-white/20 to-transparent skew-x-[-20deg] animate-cta-sweep" />
+              <UserRound className="w-4 h-4 text-[#FFFFFF] shrink-0" />
+              <span className="text-[#FFFFFF]">Login</span>
+            </button>
+
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               aria-label="Toggle navigation menu"
-              className="p-2 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+              className="lg:hidden p-2 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>

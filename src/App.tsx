@@ -132,6 +132,7 @@ export default function App() {
       <Navigation
         onBuyClick={handleBuyClick}
         onPreviewClick={() => setPreviewModalOpen(true)}
+        onLoginClick={() => navigate('/login')}
       />
 
       <main className="flex-1">

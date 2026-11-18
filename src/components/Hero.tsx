@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, BookOpen, CheckCircle, Sparkles, FileText, Download } from 'lucide-react';
+import { ArrowRight, BookOpen, CheckCircle, Sparkles, FileText } from 'lucide-react';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
 import { BookMockup } from './BookMockup.tsx';
 import { CountUp } from './motion/CountUp.tsx';
@@ -172,10 +172,6 @@ export const Hero: React.FC<HeroProps> = ({ onBuyClick, onPreviewClick }) => {
               <span className="flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 text-slate-400" />
                 Instant Digital PDF (~305 KB)
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Download className="w-3.5 h-3.5 text-cyan-400" />
-                Direct Download After Checkout
               </span>
             </div>
 

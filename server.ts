@@ -8,6 +8,7 @@ import verifyPaymentHandler from './api/verify-payment.ts';
 import testNotificationsHandler from './api/test-notifications.ts';
 import downloadEbookHandler from './api/download-ebook.ts';
 import streamPdfHandler from './api/stream-pdf.ts';
+import toolkitProgressHandler from './api/toolkit-progress.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,6 +95,17 @@ async function startServer() {
       await streamPdfHandler(req, res);
     } catch (err: any) {
       console.error('[Server] Reader stream PDF route error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.all('/api/toolkit-progress', async (req, res) => {
+    try {
+      await toolkitProgressHandler(req, res);
+    } catch (err: any) {
+      console.error('[Server] Toolkit progress route error:', err);
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });
       }

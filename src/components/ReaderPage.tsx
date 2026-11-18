@@ -27,9 +27,19 @@ import {
   FileText,
   Layers,
   Loader2,
+  Compass,
 } from 'lucide-react';
 import { BOOK_PARTS, CURATED_TOPICS, BOOK_SAMPLE_PAGES } from '../data/bookData.ts';
 import { FUNNEL_CONFIG } from '../config/funnelConfig.ts';
+import { ToolkitSection } from './ToolkitSection.tsx';
+import {
+  ToolkitProgressState,
+  createEmptyToolkitProgress,
+  sanitizeToolkitProgress,
+  toggleTaskInProgress,
+  toggleWeekCompletionInProgress,
+  selectAuthoritativeProgress,
+} from '../utils/toolkitProgress.ts';
 import {
   CustomerLicense,
   getActiveLicense,
@@ -64,16 +74,21 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
   const [currentTopicId, setCurrentTopicId] = useState<number>(() => progress.lastReadTopicId || 1);
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [fontSize, setFontSize] = useState<'sm' | 'base' | 'lg'>('base');
   const [theme, setTheme] = useState<'slate' | 'oled' | 'sepia'>('slate');
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
 
-  const [viewMode, setViewMode] = useState<'pdf' | 'notes'>('pdf');
+  const [viewMode, setViewMode] = useState<'pdf' | 'notes' | 'toolkit'>('pdf');
   const [currentPage, setCurrentPage] = useState<number>(() => progress.lastReadPage || 1);
   const [totalPages, setTotalPages] = useState<number>(81);
   const [zoomPercent, setZoomPercent] = useState<number>(100);
+  const [toolkitProgress, setToolkitProgress] = useState<ToolkitProgressState>(() =>
+    createEmptyToolkitProgress()
+  );
+  const [toolkitSyncStatus, setToolkitSyncStatus] = useState<
+    'idle' | 'loading' | 'saving' | 'synced' | 'error'
+  >('idle');
 
   // Canvas-based secure PDF document state (no <iframe src>, no internal PDF sidebar, no download controls)
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
@@ -205,6 +220,72 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
       if (loadingTask) {
         loadingTask.destroy().catch(() => {});
       }
+    };
+  }, [license, serverVerified]);
+
+  // Restore verified customer's Complete Starter Toolkit progress from backend API
+  useEffect(() => {
+    if (!license || !serverVerified) return;
+
+    let cancelled = false;
+    const cacheKey = `peh_toolkit_progress_v1:${license.customerEmail.trim().toLowerCase()}`;
+    let cachedLocal = createEmptyToolkitProgress();
+    try {
+      const rawCache = localStorage.getItem(cacheKey);
+      if (rawCache) {
+        cachedLocal = sanitizeToolkitProgress(JSON.parse(rawCache));
+        setToolkitProgress(cachedLocal);
+      }
+    } catch {
+      // Ignore corrupt local cache
+    }
+
+    setToolkitSyncStatus('loading');
+
+    fetch('/api/toolkit-progress', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${license.token}`,
+        'X-Order-Id': license.orderId,
+      },
+      cache: 'no-store',
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const authoritative = selectAuthoritativeProgress(cachedLocal, data?.progress);
+        setToolkitProgress(authoritative);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(authoritative));
+        } catch {
+          // Ignore quota errors
+        }
+
+        // If local offline edits were newer than remote, push them to the backend
+        if (cachedLocal.updatedAt > (data?.progress?.updatedAt || 0)) {
+          fetch('/api/toolkit-progress', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${license.token}`,
+              'X-Order-Id': license.orderId,
+            },
+            body: JSON.stringify({ progress: authoritative }),
+          }).catch(() => {});
+        }
+        setToolkitSyncStatus('synced');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setToolkitSyncStatus('error');
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, [license, serverVerified]);
 
@@ -422,6 +503,62 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
     setProgress(updated);
   };
 
+  const persistToolkitProgress = async (nextState: ToolkitProgressState) => {
+    if (!license) return;
+    const cacheKey = `peh_toolkit_progress_v1:${license.customerEmail.trim().toLowerCase()}`;
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify(nextState));
+    } catch {
+      // Ignore storage quota errors
+    }
+
+    setToolkitSyncStatus('saving');
+    try {
+      const res = await fetch('/api/toolkit-progress', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${license.token}`,
+          'X-Order-Id': license.orderId,
+        },
+        body: JSON.stringify({ progress: nextState }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      if (data?.progress) {
+        const synced = sanitizeToolkitProgress(data.progress);
+        setToolkitProgress(synced);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(synced));
+        } catch {
+          // Ignore quota errors
+        }
+      }
+      setToolkitSyncStatus('synced');
+    } catch {
+      setToolkitSyncStatus('error');
+    }
+  };
+
+  const handleToggleToolkitTask = (taskId: string) => {
+    const next = toggleTaskInProgress(toolkitProgress, taskId);
+    setToolkitProgress(next);
+    void persistToolkitProgress(next);
+  };
+
+  const handleToggleToolkitWeek = (weekNumber: 1 | 2 | 3 | 4) => {
+    const next = toggleWeekCompletionInProgress(toolkitProgress, weekNumber);
+    setToolkitProgress(next);
+    void persistToolkitProgress(next);
+  };
+
+  const handleOpenPdfPageFromToolkit = (pageNumber: number) => {
+    const safePage = Math.min(Math.max(1, pageNumber), totalPages || 81);
+    setCurrentPage(safePage);
+    setViewMode('pdf');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleCopyPrompt = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedPrompt(true);
@@ -571,33 +708,35 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
       )}
 
       {/* Top Navigation & Reader Controls */}
-      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-30 py-3 px-2.5 sm:px-6">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-1.5 sm:gap-4">
+      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-30 py-2.5 sm:py-3 px-2 sm:px-6">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-1 sm:gap-4">
           {/* Left: Home & Topic Navigator Trigger */}
-          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-3 shrink-0">
             <button
               onClick={onNavigateHome}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
               title="Return to Sales Page"
+              aria-label="Return to Sales Page"
             >
               <ArrowLeft className="w-4 h-4 text-cyan-400" />
             </button>
 
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
+              aria-label={`Table of Contents (Topic ${currentTopicId} of 100)`}
+              className="flex items-center gap-1.5 sm:gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
             >
-              <BookOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <BookOpen className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-cyan-400 shrink-0" />
               <span className="hidden lg:inline">Table of Contents</span>
-              <span className="font-mono text-amber-400 text-[11px] bg-slate-900 px-1.5 py-0.5 rounded">
-                <span className="hidden sm:inline">Topic </span>{currentTopicId}/100
+              <span className="hidden sm:inline font-mono text-amber-400 text-[11px] bg-slate-900 px-1.5 py-0.5 rounded">
+                Topic {currentTopicId}/100
               </span>
             </button>
           </div>
 
           {/* Center: Mode Switcher */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+            <div className="flex items-center bg-slate-950 p-0.5 sm:p-1 rounded-xl border border-slate-800 text-[11px] sm:text-xs">
               <button
                 onClick={() => setViewMode('pdf')}
                 className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
@@ -622,33 +761,23 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 <span className="hidden lg:inline">Topic Notes (100)</span>
                 <span className="lg:hidden">Notes</span>
               </button>
+              <button
+                onClick={() => setViewMode('toolkit')}
+                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 rounded-lg font-medium transition-all cursor-pointer whitespace-nowrap ${
+                  viewMode === 'toolkit'
+                    ? 'bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 font-bold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Compass className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden lg:inline">Learning Toolkit</span>
+                <span className="lg:hidden">Toolkit</span>
+              </button>
             </div>
           </div>
 
           {/* Right: Display Settings & Customer Session */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            {/* Font Size Selector */}
-            <div className="hidden sm:flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs font-mono">
-              <button
-                onClick={() => setFontSize('sm')}
-                className={`px-2 py-0.5 rounded ${fontSize === 'sm' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400'}`}
-              >
-                A-
-              </button>
-              <button
-                onClick={() => setFontSize('base')}
-                className={`px-2 py-0.5 rounded ${fontSize === 'base' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400'}`}
-              >
-                A
-              </button>
-              <button
-                onClick={() => setFontSize('lg')}
-                className={`px-2 py-0.5 rounded ${fontSize === 'lg' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400'}`}
-              >
-                A+
-              </button>
-            </div>
-
             {/* Reading Theme Toggle */}
             <button
               onClick={() => {
@@ -722,6 +851,9 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                     if ((topic as { page?: number }).page) {
                       setCurrentPage((topic as { page?: number }).page || 1);
                     }
+                    if (viewMode === 'toolkit') {
+                      setViewMode('pdf');
+                    }
                     setSidebarOpen(false);
                   }}
                   className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left text-xs transition-all cursor-pointer ${
@@ -746,10 +878,31 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
             })}
           </div>
 
-          {/* Sidebar Footer */}
-          <div className="p-3 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
-            <span>Digital Govind · Online Only</span>
-            <span className="font-mono text-cyan-400">{totalPages} Pages</span>
+          {/* Learning Toolkit Quick Access & Sidebar Footer */}
+          <div className="p-2.5 border-t border-slate-800 space-y-2">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('toolkit');
+                setSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                viewMode === 'toolkit'
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'bg-slate-950/70 border-slate-800 text-slate-200 hover:border-cyan-500/40 hover:text-cyan-300'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Compass className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Learning Toolkit</span>
+              </span>
+              <span className="font-mono text-[10px] text-amber-300">A–D</span>
+            </button>
+
+            <div className="px-0.5 text-[11px] text-slate-500 flex items-center justify-between">
+              <span>Digital Govind · Online Only</span>
+              <span className="font-mono text-cyan-400">{totalPages} Pages</span>
+            </div>
           </div>
         </aside>
 
@@ -917,7 +1070,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 </div>
               </div>
             </div>
-          ) : (
+          ) : viewMode === 'notes' ? (
             /* Interactive Curated Topic Notes View */
             <div className={`rounded-3xl border ${contentBg} p-6 sm:p-10 shadow-2xl relative overflow-hidden transition-all`}>
               {/* Header: Part info & Topic page */}
@@ -963,11 +1116,7 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
               </div>
 
               {/* Topic Content Body */}
-              <div
-                className={`space-y-4 leading-relaxed font-sans text-slate-300 ${
-                  fontSize === 'sm' ? 'text-xs leading-6' : fontSize === 'lg' ? 'text-base leading-8' : 'text-sm leading-7'
-                }`}
-              >
+              <div className="space-y-4 leading-relaxed font-sans text-slate-300 text-sm leading-7">
                 {curatedDetail?.summary ? (
                   <p>{curatedDetail.summary}</p>
                 ) : sampleExcerpt?.excerpt ? (
@@ -1055,6 +1204,16 @@ export const ReaderPage: React.FC<ReaderPageProps> = ({ onNavigateHome, onNaviga
                 </button>
               </div>
             </div>
+          ) : (
+            <ToolkitSection
+              customerEmail={license.customerEmail}
+              progress={toolkitProgress}
+              syncStatus={toolkitSyncStatus}
+              onRetrySync={() => void persistToolkitProgress(toolkitProgress)}
+              onToggleTask={handleToggleToolkitTask}
+              onToggleWeekComplete={handleToggleToolkitWeek}
+              onOpenPdfPage={handleOpenPdfPageFromToolkit}
+            />
           )}
         </main>
       </div>

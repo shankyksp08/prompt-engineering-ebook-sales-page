@@ -88,6 +88,22 @@ function devApiRoutesPlugin(): Plugin {
             const { default: handler } = await server.ssrLoadModule('/api/test-notifications.ts');
             return await handler(req, res);
           }
+          if (pathname === '/api/toolkit-progress') {
+            if ((req.method === 'POST' || req.method === 'PUT') && !(req as any).body) {
+              const buffers: Buffer[] = [];
+              for await (const chunk of req) {
+                buffers.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+              }
+              const raw = Buffer.concat(buffers).toString('utf-8');
+              try {
+                (req as any).body = raw ? JSON.parse(raw) : {};
+              } catch {
+                (req as any).body = {};
+              }
+            }
+            const { default: handler } = await server.ssrLoadModule('/api/toolkit-progress.ts');
+            return await handler(req, res);
+          }
         } catch (err: any) {
           console.error('[DevApiPlugin] Error handling route', pathname, err);
           if (!res.headersSent) {
